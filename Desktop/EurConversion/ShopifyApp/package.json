@@ -1,0 +1,17 @@
+{
+  "name": "shopify-currency-converter",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "shopify app dev",
+    "build": "shopify app build",
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "@shopify/shopify-api": "^3.0.0",
+    "express": "^4.18.2"
+  },
+  "devDependencies": {
+    "@shopify/cli": "^3.40.0"
+  }
+}

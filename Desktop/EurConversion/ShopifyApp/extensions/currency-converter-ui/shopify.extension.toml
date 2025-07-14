@@ -1,0 +1,3 @@
+name = "Currency Converter"
+type = "checkout_post_purchase"
+extension_points = ["Checkout::PostPurchase::Render"]

@@ -1,0 +1,12 @@
+{
+  "name": "currency-converter-ui",
+  "version": "1.0.0",
+  "main": "src/index.js",
+  "scripts": {
+    "build": "shopify extension build",
+    "dev": "shopify extension serve"
+  },
+  "dependencies": {
+    "@shopify/checkout-ui-extensions": "^0.27.3"
+  }
+}
