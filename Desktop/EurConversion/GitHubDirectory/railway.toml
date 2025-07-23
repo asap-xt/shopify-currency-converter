@@ -1,5 +1,11 @@
-[deploy]
-startCommand = "npm run build && npm start"
-
 [build]
-buildCommand = "npm install --legacy-peer-deps && npm run db:generate"
+builder = "NIXPACKS"
+buildCommand = "npm install --legacy-peer-deps && npm run db:generate && npm run build"
+
+[deploy]
+startCommand = "npm start"
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 10
+
+[env]
+NODE_ENV = "production"
