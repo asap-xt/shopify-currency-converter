@@ -1,0 +1,8 @@
+node_modules
+.git
+.env
+build
+public/build
+prisma/dev.db
+*.log
+.DS_Store
