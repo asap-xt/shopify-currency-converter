@@ -19,7 +19,7 @@
     "dotenv":               "^10.0.0",
     "isomorphic-fetch":     "^3.0.0",
     "koa-router":           "^10.1.1",
-    "raw-body":             "^2.5.3"
+    "raw-body":             "^3.0.0"
   },
   "devDependencies": {
     "@shopify/cli": "^3.83.0"
