@@ -1,9 +1,10 @@
 {
   "name": "shopify-multicurrency-app",
   "version": "1.0.0",
+  "private": true,
   "description": "Shopify app to show BGN↔EUR prices on Thank You & Order Status pages",
   "scripts": {
-    "dev": "shopify app dev",
+    "dev":   "shopify app dev",
     "build": "shopify extension build",
     "start": "node server/index.js"
   },
@@ -11,16 +12,12 @@
     "node": ">=18.x"
   },
   "dependencies": {
-    "@shopify/app-bridge": "3.7.9",
-    "@shopify/koa-shopify-auth": "^4.2.2",
-    "@shopify/shopify-api": "^4.7.2",
-    "koa": "^2.13.4",
-    "koa-session": "^5.12.3",
-    "dotenv": "^10.0.0",
-    "isomorphic-fetch": "^3.0.0"
-  },
-  "devDependencies": {
-    "@shopify/cli": "^3.25.0",
-    "@shopify/cli-extension": "^3.0.0"
+    "@shopify/app-bridge":       "3.7.9",
+    "@shopify/koa-shopify-auth": "^5.0.3",
+    "@shopify/shopify-api":      "^11.14.1",
+    "koa":                       "^2.13.4",
+    "koa-session":               "^5.12.3",
+    "dotenv":                    "^10.0.0",
+    "isomorphic-fetch":          "^3.0.0"
   }
 }

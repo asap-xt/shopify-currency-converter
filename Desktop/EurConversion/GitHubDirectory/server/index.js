@@ -1,78 +1,81 @@
+// server/index.js
+import '@shopify/shopify-api/adapters/node';  // Нужен адаптер за Node.js среда
 import Koa from 'koa';
-import session from 'koa-session';
 import Router from 'koa-router';
-import createShopifyAuth, { verifyRequest } from '@shopify/koa-shopify-auth';
-import { shopifyApi, LATEST_API_VERSION, BillingInterval } from '@shopify/shopify-api';
 import dotenv from 'dotenv';
+import { Shopify, LATEST_API_VERSION, BillingInterval } from '@shopify/shopify-api';
 
 dotenv.config();
-const { SHOPIFY_API_KEY, SHOPIFY_API_SECRET, SCOPES, HOST } = process.env;
+const { SHOPIFY_API_KEY, SHOPIFY_API_SECRET, SCOPES, HOST, HOST_NAME } = process.env;
 
-const app = new Koa();
-app.keys = [SHOPIFY_API_SECRET];
-app.use(session(app));
-
-const shopify = shopifyApi({
-  apiKey: SHOPIFY_API_KEY,
-  apiSecretKey: SHOPIFY_API_SECRET,
-  scopes: SCOPES.split(','),
-  hostName: HOST.replace(/https?:\/\//, ''),
-  apiVersion: LATEST_API_VERSION,
-  isEmbeddedApp: true,
+// Инициализиране на Shopify контекста
+Shopify.Context.initialize({
+  API_KEY:      SHOPIFY_API_KEY,
+  API_SECRET_KEY: SHOPIFY_API_SECRET,
+  SCOPES:       SCOPES.split(','),                // напр. "read_orders,write_themes"
+  HOST_NAME:    HOST_NAME,                        // без https://
+  API_VERSION:  LATEST_API_VERSION,               // последна версия
+  IS_EMBEDDED_APP: true,
+  SESSION_STORAGE: new Shopify.Session.MemorySessionStorage(), // в паметта – за прод, замени с DB
 });
 
-app.use(
-  createShopifyAuth({
-    async afterAuth(ctx) {
-      const { shop, accessToken } = ctx.state.shopify;
-      ctx.cookies.set('shopOrigin', shop, { httpOnly: false });
+const app = new Koa();
+const router = new Router();
 
-      // GraphQL клиент
-      const client = new shopify.clients.Graphql({ shop, accessToken });
+// 1) Започваме OAuth flow
+router.get('/auth', async (ctx) => {
+  const shop = ctx.query.shop;
+  if (!shop) ctx.throw(400, 'Missing shop parameter.');
+  
+  const redirectUrl = await Shopify.Auth.beginAuth(
+    ctx.req, ctx.res,
+    shop,
+    '/auth/callback',
+    false // не използваме online tokens
+  );
+  ctx.redirect(redirectUrl);
+  ctx.respond = false; // Koa: пренебрегни автоматичното писане на отговор
+});
 
-      // Проверка за съществуващи активни абонаменти
-      const existing = await client.query({
+// 2) OAuth callback: валидация и запазване на session
+router.get('/auth/callback', async (ctx) => {
+  try {
+    const session = await Shopify.Auth.validateAuthCallback(
+      ctx.req, ctx.res,
+      ctx.query
+    );
+    // session.shop, session.accessToken
+    
+    // Запазваме shopOrigin cookie за фронтенд
+    ctx.cookies.set('shopOrigin', session.shop, { httpOnly: false });
+    
+    // 3) Проверка за активен абонамент
+    const client = new Shopify.Clients.Graphql(session.shop, session.accessToken);
+    const existing = await client.query({
+      data: `{
+        currentAppInstallation {
+          activeSubscriptions { name status }
+        }
+      }`
+    });
+    const subs = existing.body.data.currentAppInstallation.activeSubscriptions;
+    const isActive = subs.some(s => s.name === 'Monthly Multicurrency' && s.status === 'ACTIVE');
+
+    // 4) Ако няма – създаваме нов с 5‑дневен trial
+    if (!isActive) {
+      const createSub = await client.query({
         data: {
           query: `
-          {
-            currentAppInstallation {
-              activeSubscriptions {
-                name
-                status
-              }
-            }
-          }
-        `,
-        },
-      });
-      const subs = existing.body.data.currentAppInstallation.activeSubscriptions;
-      const hasActive = subs.some(
-        (sub) => sub.name === 'Monthly Multicurrency' && sub.status === 'ACTIVE'
-      );
-
-      // Ако няма активен абонамент, създаваме нов с 5‑дневен trial
-      if (!hasActive) {
-        const response = await client.query({
-          data: {
-            query: `
-            mutation AppSubscriptionCreate(
-              $name: String!,
-              $returnUrl: URL!,
-              $trialDays: Int!,
-              $price: MoneyInput!,
-              $interval: BillingInterval!
+            mutation subscriptionCreate(
+              $name: String!, $returnUrl: URL!, $trialDays: Int!,
+              $price: MoneyInput!, $interval: BillingInterval!
             ) {
               appSubscriptionCreate(
                 name: $name,
                 returnUrl: $returnUrl,
                 trialDays: $trialDays,
                 lineItems: [{
-                  plan: {
-                    appRecurringPricingDetails: {
-                      price: $price,
-                      interval: $interval
-                    }
-                  }
+                  plan: { appRecurringPricingDetails: { price: $price, interval: $interval } }
                 }]
               ) {
                 confirmationUrl
@@ -80,33 +83,50 @@ app.use(
               }
             }
           `,
-            variables: {
-              name: 'Monthly Multicurrency',
-              returnUrl: `${HOST}/?billing=success`,
-              trialDays: 5,
-              price: { amount: 14.99, currencyCode: 'USD' },
-              interval: BillingInterval.Every30Days,
-            },
-          },
-        });
-
-        const { confirmationUrl, userErrors } = response.body.data.appSubscriptionCreate;
-        if (userErrors.length) {
-          console.error('Billing user errors:', userErrors);
-          ctx.throw(500, 'Billing API error');
+          variables: {
+            name:       'Monthly Multicurrency',
+            returnUrl:  `${HOST}/?billing=success`,
+            trialDays:  5,
+            price:      { amount: 14.99, currencyCode: 'USD' },
+            interval:   BillingInterval.Every30Days
+          }
         }
-        ctx.redirect(confirmationUrl);
-        return;
+      });
+      const { confirmationUrl, userErrors } = createSub.body.data.appSubscriptionCreate;
+      if (userErrors.length) {
+        console.error('Billing errors:', userErrors);
+        ctx.throw(500, 'Billing API error');
       }
+      ctx.redirect(confirmationUrl);
+      ctx.respond = false;
+      return;
+    }
+    
+    // ако абонаментът е активен – отиваме в приложението
+    ctx.redirect('/');
+    ctx.respond = false;
+  } catch (error) {
+    console.error('Failed OAuth callback:', error);
+    ctx.throw(500, error);
+  }
+});
 
-      // Иначе – директно в приложението
-      ctx.redirect('/');
-    },
-  })
-);
+// 5) Всички други route-ове – влизане в app-а (нуждаем се от валидна сесия)
+router.get('/', async (ctx) => {
+  let session;
+  try {
+    session = await Shopify.Utils.loadCurrentSession(ctx.req, ctx.res);
+  } catch (e) {
+    // session invalid или липсва – пренасочваме към /auth
+  }
+  if (!session) {
+    const shop = ctx.query.shop || ctx.cookies.get('shopOrigin');
+    ctx.redirect(`/auth?shop=${shop}`);
+    ctx.respond = false;
+    return;
+  }
 
-const router = new Router();
-router.get('/', verifyRequest(), async (ctx) => {
+  // Тук сервираме HTML с app-bridge инстанция
   ctx.body = `<!DOCTYPE html>
 <html>
   <head>
@@ -118,7 +138,7 @@ router.get('/', verifyRequest(), async (ctx) => {
       const createApp = window['app-bridge'].default;
       window.app = createApp({
         apiKey: '${SHOPIFY_API_KEY}',
-        shopOrigin: '${ctx.cookies.get('shopOrigin')}'
+        shopOrigin: '${session.shop}'
       });
     </script>
   </body>
