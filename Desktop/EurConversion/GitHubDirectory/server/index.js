@@ -148,4 +148,6 @@ router.get('/', async (ctx) => {
 app.use(router.routes()).use(router.allowedMethods());
 
 const PORT = parseInt(process.env.PORT, 10) || 8081;
-app.listen(PORT, () => console.log(\`> Server listening on ${PORT}\`));
+app.listen(PORT, function() {
+  console.log('> Server listening on ' + PORT);
+});
