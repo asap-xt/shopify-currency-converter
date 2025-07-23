@@ -2,4 +2,4 @@
 startCommand = "npm run build && npm start"
 
 [build]
-buildCommand = "npm install && npm run db:generate"
+buildCommand = "npm install --legacy-peer-deps && npm run db:generate"
