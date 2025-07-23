@@ -1,0 +1,5 @@
+[deploy]
+startCommand = "npm run build && npm start"
+
+[build]
+buildCommand = "npm install && npm run db:generate"

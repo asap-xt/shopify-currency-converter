@@ -1,0 +1,171 @@
+{{ 'dual-currency.css' | asset_url | stylesheet_tag }}
+
+{% comment %} Get app settings via metafields {% endcomment %}
+{% assign base_currency = 'BGN' %}
+{% assign exchange_rate = 1.95583 %}
+{% assign is_active = true %}
+
+{% comment %} Only show for Bulgarian shipping addresses {% endcomment %}
+{% assign show_dual_currency = false %}
+{% if order.shipping_address.country_code == 'BG' or checkout.shipping_address.country_code == 'BG' %}
+  {% assign show_dual_currency = true %}
+{% endif %}
+
+{% if show_dual_currency and is_active %}
+<div class="dual-currency-container">
+  <div class="dual-currency-header">
+    <h3>{{ block.settings.title | default: 'Обобщение на поръчката' }}</h3>
+  </div>
+  
+  <div class="dual-currency-content">
+    {% comment %} Order Items {% endcomment %}
+    <div class="dual-currency-section">
+      <h4>Продукти:</h4>
+      
+      {% for line_item in order.line_items %}
+        <div class="dual-currency-line-item">
+          <div class="item-details">
+            <span class="item-name">{{ line_item.title }}</span>
+            {% if line_item.variant.title != 'Default Title' %}
+              <span class="item-variant">- {{ line_item.variant.title }}</span>
+            {% endif %}
+            <span class="item-quantity">x {{ line_item.quantity }}</span>
+          </div>
+          
+          <div class="item-pricing">
+            {% assign line_total = line_item.final_line_price %}
+            <div class="price-line">
+              <span class="price-bgn">{{ line_total | money }}</span>
+              {% if base_currency == 'BGN' %}
+                {% assign eur_amount = line_total | divided_by: exchange_rate %}
+                <span class="price-eur">({{ eur_amount | money: 'EUR' }})</span>
+              {% else %}
+                {% assign bgn_amount = line_total | times: exchange_rate %}
+                <span class="price-bgn-secondary">({{ bgn_amount | money: 'BGN' }})</span>
+              {% endif %}
+            </div>
+          </div>
+        </div>
+      {% endfor %}
+    </div>
+    
+    {% comment %} Subtotal {% endcomment %}
+    <div class="dual-currency-section">
+      <div class="dual-currency-total-line">
+        <span class="total-label">Междинна сума:</span>
+        <div class="total-pricing">
+          <span class="price-bgn">{{ order.line_items_subtotal_price | money }}</span>
+          {% if base_currency == 'BGN' %}
+            {% assign eur_subtotal = order.line_items_subtotal_price | divided_by: exchange_rate %}
+            <span class="price-eur">({{ eur_subtotal | money: 'EUR' }})</span>
+          {% else %}
+            {% assign bgn_subtotal = order.line_items_subtotal_price | times: exchange_rate %}
+            <span class="price-bgn-secondary">({{ bgn_subtotal | money: 'BGN' }})</span>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+    
+    {% comment %} Shipping {% endcomment %}
+    {% if order.shipping_price > 0 %}
+    <div class="dual-currency-section">
+      <div class="dual-currency-total-line">
+        <span class="total-label">Доставка:</span>
+        <div class="total-pricing">
+          <span class="price-bgn">{{ order.shipping_price | money }}</span>
+          {% if base_currency == 'BGN' %}
+            {% assign eur_shipping = order.shipping_price | divided_by: exchange_rate %}
+            <span class="price-eur">({{ eur_shipping | money: 'EUR' }})</span>
+          {% else %}
+            {% assign bgn_shipping = order.shipping_price | times: exchange_rate %}
+            <span class="price-bgn-secondary">({{ bgn_shipping | money: 'BGN' }})</span>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+    {% endif %}
+    
+    {% comment %} Discounts {% endcomment %}
+    {% if order.total_discounts > 0 %}
+    <div class="dual-currency-section">
+      <div class="dual-currency-total-line discount-line">
+        <span class="total-label">Отстъпка:</span>
+        <div class="total-pricing">
+          <span class="price-bgn discount-amount">-{{ order.total_discounts | money }}</span>
+          {% if base_currency == 'BGN' %}
+            {% assign eur_discount = order.total_discounts | divided_by: exchange_rate %}
+            <span class="price-eur discount-amount">(-{{ eur_discount | money: 'EUR' }})</span>
+          {% else %}
+            {% assign bgn_discount = order.total_discounts | times: exchange_rate %}
+            <span class="price-bgn-secondary discount-amount">(-{{ bgn_discount | money: 'BGN' }})</span>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+    {% endif %}
+    
+    {% comment %} Taxes {% endcomment %}
+    {% if order.tax_price > 0 %}
+    <div class="dual-currency-section">
+      <div class="dual-currency-total-line">
+        <span class="total-label">Данъци:</span>
+        <div class="total-pricing">
+          <span class="price-bgn">{{ order.tax_price | money }}</span>
+          {% if base_currency == 'BGN' %}
+            {% assign eur_tax = order.tax_price | divided_by: exchange_rate %}
+            <span class="price-eur">({{ eur_tax | money: 'EUR' }})</span>
+          {% else %}
+            {% assign bgn_tax = order.tax_price | times: exchange_rate %}
+            <span class="price-bgn-secondary">({{ bgn_tax | money: 'BGN' }})</span>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+    {% endif %}
+    
+    {% comment %} Total {% endcomment %}
+    <div class="dual-currency-section dual-currency-final-total">
+      <div class="dual-currency-total-line total-line">
+        <span class="total-label"><strong>Обща сума:</strong></span>
+        <div class="total-pricing">
+          <span class="price-bgn total-price"><strong>{{ order.total_price | money }}</strong></span>
+          {% if base_currency == 'BGN' %}
+            {% assign eur_total = order.total_price | divided_by: exchange_rate %}
+            <span class="price-eur total-price"><strong>({{ eur_total | money: 'EUR' }})</strong></span>
+          {% else %}
+            {% assign bgn_total = order.total_price | times: exchange_rate %}
+            <span class="price-bgn-secondary total-price"><strong>({{ bgn_total | money: 'BGN' }})</strong></span>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+  </div>
+  
+  <div class="dual-currency-footer">
+    <p class="exchange-rate-note">
+      * Обменен курс: 1 EUR = {{ exchange_rate }} BGN
+    </p>
+  </div>
+</div>
+{% endif %}
+
+{% schema %}
+{
+  "name": "Dual Currency Display",
+  "target": "section",
+  "settings": [
+    {
+      "type": "text",
+      "id": "title",
+      "label": "Заглавие",
+      "default": "Обобщение на поръчката"
+    },
+    {
+      "type": "checkbox",
+      "id": "show_exchange_rate",
+      "label": "Покажи обменния курс",
+      "default": true
+    }
+  ]
+}
+{% endschema %}

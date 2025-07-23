@@ -1,0 +1,174 @@
+.dual-currency-container {
+  background: #ffffff;
+  border: 2px solid #e1e3e5;
+  border-radius: 8px;
+  padding: 24px;
+  margin: 20px 0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.dual-currency-header h3 {
+  margin: 0 0 20px 0;
+  color: #202223;
+  font-size: 18px;
+  font-weight: 600;
+  border-bottom: 1px solid #e1e3e5;
+  padding-bottom: 12px;
+}
+
+.dual-currency-section {
+  margin-bottom: 16px;
+}
+
+.dual-currency-section h4 {
+  margin: 0 0 12px 0;
+  color: #202223;
+  font-size: 14px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.dual-currency-line-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 0;
+  border-bottom: 1px solid #f1f2f3;
+}
+
+.dual-currency-line-item:last-child {
+  border-bottom: none;
+}
+
+.item-details {
+  flex: 1;
+}
+
+.item-name {
+  color: #202223;
+  font-weight: 500;
+}
+
+.item-variant {
+  color: #6d7175;
+  font-size: 14px;
+}
+
+.item-quantity {
+  color: #6d7175;
+  font-size: 14px;
+  margin-left: 8px;
+}
+
+.item-pricing {
+  text-align: right;
+}
+
+.dual-currency-total-line {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 0;
+}
+
+.total-label {
+  color: #202223;
+  font-weight: 500;
+}
+
+.total-pricing {
+  text-align: right;
+}
+
+.price-line {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+}
+
+.price-bgn {
+  color: #202223;
+  font-weight: 600;
+  font-size: 16px;
+}
+
+.price-eur,
+.price-bgn-secondary {
+  color: #6d7175;
+  font-size: 14px;
+  font-style: italic;
+}
+
+.dual-currency-final-total {
+  border-top: 2px solid #e1e3e5;
+  padding-top: 16px;
+  margin-top: 20px;
+}
+
+.total-line .price-bgn,
+.total-line .price-eur,
+.total-line .price-bgn-secondary {
+  font-size: 18px;
+}
+
+.total-price {
+  font-weight: 700 !important;
+}
+
+.discount-line {
+  color: #d72c0d;
+}
+
+.discount-amount {
+  color: #d72c0d !important;
+}
+
+.dual-currency-footer {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid #f1f2f3;
+}
+
+.exchange-rate-note {
+  color: #6d7175;
+  font-size: 12px;
+  margin: 0;
+  text-align: center;
+  font-style: italic;
+}
+
+/* Mobile responsiveness */
+@media (max-width: 768px) {
+  .dual-currency-container {
+    padding: 16px;
+    margin: 16px 0;
+  }
+  
+  .dual-currency-line-item {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+  }
+  
+  .item-pricing {
+    text-align: left;
+    width: 100%;
+  }
+  
+  .price-line {
+    align-items: flex-start;
+  }
+  
+  .dual-currency-total-line {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+  }
+  
+  .total-pricing {
+    text-align: left;
+  }
+}

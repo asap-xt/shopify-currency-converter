@@ -1,0 +1,34 @@
+node_modules/
+build/
+public/build/
+.env
+.env.local
+
+# Database
+prisma/dev.db
+prisma/dev.db-journal
+
+# Shopify
+.shopify/
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Runtime data
+pids
+*.pid
+*.seed
+*.pid.lock
+
+# Coverage directory used by tools like istanbul
+coverage/
+
+# DS_Store
+.DS_Store
+
+# Temporary folders
+tmp/
+temp/

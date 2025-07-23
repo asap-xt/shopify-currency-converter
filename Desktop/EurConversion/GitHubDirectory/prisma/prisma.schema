@@ -1,0 +1,36 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = "file:./dev.db"
+}
+
+model Session {
+  id          String    @id @default(cuid())
+  shop        String
+  state       String
+  isOnline    Boolean   @default(false)
+  scope       String?
+  expires     DateTime?
+  accessToken String
+  userId      BigInt?
+  firstName   String?
+  lastName    String?
+  email       String?
+  accountOwner Boolean  @default(false)
+  locale      String?
+  collaborator Boolean? @default(false)
+  emailVerified Boolean? @default(false)
+}
+
+model Settings {
+  id            String @id @default(cuid())
+  shop          String @unique
+  baseCurrency  String @default("BGN") // BGN or EUR
+  exchangeRate  Float  @default(1.95583) // BGN to EUR rate
+  isActive      Boolean @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}

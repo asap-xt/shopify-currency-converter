@@ -1,0 +1,10 @@
+name = "dual-currency-display"
+type = "theme_app_extension"
+
+[extension_points]
+
+[[extension_points.static]]
+target = "checkout.thank-you.dynamic"
+
+[[extension_points.static]]
+target = "customer-account.order-status.dynamic"
