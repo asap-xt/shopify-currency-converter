@@ -1,0 +1,21 @@
+# syntax=docker/dockerfile:1
+FROM node:18-alpine
+
+WORKDIR /app
+
+# 1) Copy only package files, install all deps (including @shopify/cli)
+COPY package.json package-lock.json ./
+RUN npm install
+
+# 2) Install Shopify CLI globally so "shopify" is on $PATH
+RUN npm install -g @shopify/cli@3
+
+# 3) Copy the rest of your code
+COPY . .
+
+# 4) Build your theme extension
+RUN shopify extension build
+
+# 5) Expose port & start your server
+EXPOSE 8081
+CMD ["npm", "start"]
