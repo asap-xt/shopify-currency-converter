@@ -1,0 +1,21 @@
+{
+  "name": "MultiCurrency Order Totals",
+  "settings": [
+    {
+      "type": "select",
+      "id": "base_currency",
+      "label": "Base currency of prices",
+      "default": "BGN",
+      "options": [
+        { "value": "BGN", "label": "Bulgarian Lev (BGN)" },
+        { "value": "EUR", "label": "Euro (EUR)" }
+      ]
+    },
+    {
+      "type": "text",
+      "id": "exchange_rate",
+      "label": "Exchange rate (1 BGN = X EUR or 1 EUR = X BGN)",
+      "default": "1.95583"
+    }
+  ]
+}

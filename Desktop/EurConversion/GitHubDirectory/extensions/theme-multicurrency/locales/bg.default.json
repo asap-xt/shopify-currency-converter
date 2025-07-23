@@ -1,0 +1,9 @@
+{
+  "blocks": {
+    "order-multicurrency": {
+      "shipping": "Доставка",
+      "discount": "Отстъпка",
+      "total": "Общо"
+    }
+  }
+}
