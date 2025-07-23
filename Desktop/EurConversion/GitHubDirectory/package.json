@@ -5,7 +5,7 @@
   "description": "Shopify app to show BGN↔EUR prices on Thank You & Order Status pages",
   "scripts": {
     "dev":   "shopify app dev",
-    "build": "shopify extension build",
+    "build": "npx shopify extension build",
     "start": "node server/index.js"
   },
   "engines": {
@@ -19,5 +19,8 @@
     "koa-session":               "^5.12.3",
     "dotenv":                    "^10.0.0",
     "isomorphic-fetch":          "^3.0.0"
+  },
+  "devDependencies": {
+    "@shopify/cli": "^3.25.0"
   }
 }
