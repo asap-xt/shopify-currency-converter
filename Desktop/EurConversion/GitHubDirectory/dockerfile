@@ -1,21 +1,21 @@
-# syntax=docker/dockerfile:1
+# Use official Node.js 18 image
 FROM node:18-alpine
 
+# Set working directory
 WORKDIR /app
 
-# 1) Copy only package files, install all deps (including @shopify/cli)
+# Copy only package manifests first and install production deps
 COPY package.json package-lock.json ./
-RUN npm install
+RUN npm install --omit=dev
 
-# 2) Install Shopify CLI globally so "shopify" is on $PATH
-RUN npm install -g @shopify/cli@3
-
-# 3) Copy the rest of your code
+# Copy all source (including your pre-built extension in extensions/.../dist)
 COPY . .
 
-# 4) Build your theme extension
-RUN shopify extension build
+# Set production mode
+ENV NODE_ENV=production
 
-# 5) Expose port & start your server
+# Expose the port your Koa server listens on
 EXPOSE 8081
+
+# Start the application
 CMD ["npm", "start"]
