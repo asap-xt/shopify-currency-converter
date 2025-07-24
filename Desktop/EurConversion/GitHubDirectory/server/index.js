@@ -201,8 +201,8 @@ router.get('/auth/callback', async (ctx) => {
         const tokenData = await tokenResponse.json();
         console.log('Token exchange successful for shop:', shop);
         
-        // Създаваме сесия
-        const session = new Session.Session({
+        // Създаваме сесия - използваме директно Session класа
+        const session = new Session({
             id: `${shop}-offline`,
             shop: shop,
             state: state,
