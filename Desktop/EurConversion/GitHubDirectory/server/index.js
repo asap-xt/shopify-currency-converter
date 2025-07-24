@@ -423,6 +423,101 @@ router.get('/api/shop', async (ctx) => {
     }
 });
 
+// DEBUG: Check actual token permissions
+router.get('/api/debug-token', async (ctx) => {
+    console.log('=== TOKEN DEBUG ===');
+    try {
+        const shop = ctx.query.shop;
+        if (!shop) {
+            ctx.status = 400;
+            ctx.body = 'Missing shop parameter';
+            return;
+        }
+        
+        const sessionId = `${shop}-offline`;
+        const session = await memorySessionStorage.loadSession(sessionId);
+        
+        if (!session || !session.accessToken) {
+            ctx.status = 401;
+            ctx.body = 'Unauthorized - No valid session';
+            return;
+        }
+        
+        // Test various API endpoints to see what works
+        const tests = {};
+        
+        // Test 1: Shop API (should work)
+        try {
+            const shopResponse = await fetch(`https://${shop}/admin/api/2024-01/shop.json`, {
+                headers: { 
+                    'X-Shopify-Access-Token': session.accessToken,
+                    'Content-Type': 'application/json'
+                }
+            });
+            tests.shop = {
+                status: shopResponse.status,
+                success: shopResponse.ok,
+                error: shopResponse.ok ? null : `${shopResponse.status} ${shopResponse.statusText}`
+            };
+        } catch (err) {
+            tests.shop = { success: false, error: err.message };
+        }
+        
+        // Test 2: Orders Count (lighter than full orders)
+        try {
+            const countResponse = await fetch(`https://${shop}/admin/api/2024-01/orders/count.json`, {
+                headers: { 
+                    'X-Shopify-Access-Token': session.accessToken,
+                    'Content-Type': 'application/json'
+                }
+            });
+            const countText = await countResponse.text();
+            tests.ordersCount = {
+                status: countResponse.status,
+                success: countResponse.ok,
+                data: countResponse.ok ? JSON.parse(countText) : null,
+                error: countResponse.ok ? null : `${countResponse.status} ${countResponse.statusText}`,
+                rawResponse: countText
+            };
+        } catch (err) {
+            tests.ordersCount = { success: false, error: err.message };
+        }
+        
+        // Test 3: Direct orders API with minimal params
+        try {
+            const ordersResponse = await fetch(`https://${shop}/admin/api/2024-01/orders.json?limit=1`, {
+                headers: { 
+                    'X-Shopify-Access-Token': session.accessToken,
+                    'Content-Type': 'application/json'
+                }
+            });
+            const ordersText = await ordersResponse.text();
+            tests.orders = {
+                status: ordersResponse.status,
+                success: ordersResponse.ok,
+                data: ordersResponse.ok ? JSON.parse(ordersText) : null,
+                error: ordersResponse.ok ? null : `${ordersResponse.status} ${ordersResponse.statusText}`,
+                rawResponse: ordersText.length > 500 ? ordersText.substring(0, 500) + '...' : ordersText
+            };
+        } catch (err) {
+            tests.orders = { success: false, error: err.message };
+        }
+        
+        ctx.body = {
+            shop: shop,
+            sessionScope: session.scope,
+            requestedScopes: SCOPES,
+            tokenPresent: !!session.accessToken,
+            tests: tests
+        };
+        
+    } catch (error) {
+        console.error('Error in token debug:', error);
+        ctx.status = 500;
+        ctx.body = 'Debug failed: ' + error.message;
+    }
+});
+
 // Middleware за всички останали заявки, за да се покаже главната страница
 router.get('(/)', async (ctx) => {
     console.log('=== MAIN ROUTE ===');
@@ -478,6 +573,7 @@ router.get('(/)', async (ctx) => {
                 <li><a href="/api/orders?shop=${shop}" target="_blank">🛍️ Test Orders API</a></li>
                 <li><a href="/api/themes?shop=${shop}" target="_blank">🎨 Test Themes API</a></li>
                 <li><a href="/api/shop?shop=${shop}" target="_blank">🏪 Test Shop Info API</a></li>
+                <li><a href="/api/debug-token?shop=${shop}" target="_blank">🔍 Debug Token Permissions</a></li>
                 <li><a href="/debug" target="_blank">Debug Info</a></li>
                 <li><a href="/health" target="_blank">Health Check</a></li>
               </ul>
