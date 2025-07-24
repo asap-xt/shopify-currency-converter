@@ -5,8 +5,9 @@ import Koa from 'koa';
 import session from 'koa-session';
 import Router from 'koa-router';
 import getRawBody from 'raw-body';
-// ПРОМЯНА 1: Добавяме MemorySessionStorage към импорта
-import { shopifyApi, LATEST_API_VERSION, BillingInterval, MemorySessionStorage } from '@shopify/shopify-api';
+// ПРОМЯНА: Коригирани импорти
+import { shopifyApi, LATEST_API_VERSION, BillingInterval } from '@shopify/shopify-api';
+import { MemorySessionStorage } from '@shopify/shopify-api/session-storage/memory';
 
 const {
   SHOPIFY_API_KEY,
