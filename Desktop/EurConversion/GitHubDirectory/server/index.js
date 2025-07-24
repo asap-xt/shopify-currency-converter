@@ -1,6 +1,6 @@
 // server/index.js
 import 'dotenv/config';                            // зареждаме .env
-import '@shopify/shopify-api/adapters/node.js';    // задължително с .js
+import '@shopify/shopify-api/adapters/node';    // задължително с .js
 import Koa from 'koa';
 import session from 'koa-session';
 import Router from 'koa-router';

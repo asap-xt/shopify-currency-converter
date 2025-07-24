@@ -1,5 +1,6 @@
 {
   "name": "shopify-multicurrency-app",
+  "type": "module"
   "version": "1.0.0",
   "private": true,
   "description": "Shopify app to show BGN↔EUR prices on Thank You & Order Status pages",
