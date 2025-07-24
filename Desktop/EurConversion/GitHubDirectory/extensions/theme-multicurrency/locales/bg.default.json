@@ -1,9 +1,11 @@
 {
   "blocks": {
     "order-multicurrency": {
-      "shipping": "Доставка",
+      "title": "Стойност на поръчката",
+      "shipping": "Доставка", 
+      "tax": "ДДС",
       "discount": "Отстъпка",
-      "total": "Общо"
+      "total": "Общо за плащане"
     }
   }
 }
