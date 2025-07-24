@@ -15,14 +15,14 @@ const {
   HOST_NAME
 } = process.env;
 
-// Initialize Shopify API client
+// Инициализация на Shopify API клиента
 const Shopify = shopifyApi({
-  apiKey:       SHOPIFY_API_KEY,
-  apiSecretKey: SHOPIFY_API_SECRET,
-  scopes:       SCOPES.split(','),
-  hostName:     HOST_NAME,
-  apiVersion:   LATEST_API_VERSION,
-  isEmbeddedApp:true,
+  apiKey:         SHOPIFY_API_KEY,
+  apiSecretKey:   SHOPIFY_API_SECRET,
+  scopes:         SCOPES.split(','),
+  hostName:       HOST_NAME,
+  apiVersion:     LATEST_API_VERSION,
+  isEmbeddedApp:  true,
   sessionStorage: new Shopify.Session.MemorySessionStorage()
 });
 
@@ -32,18 +32,18 @@ app.use(session(app));
 
 const router = new Router();
 
-// Webhook handler
+// Webhook endpoint
 router.post('/webhooks', async (ctx) => {
   const rawBody = await getRawBody(ctx.req);
   try {
     await Shopify.Webhooks.Registry.process({
-      rawBody,
+      rawBody:    rawBody,
       rawRequest: ctx.req,
-      rawResponse: ctx.res,
+      rawResponse: ctx.res
     });
     ctx.status = 200;
   } catch (err) {
-    console.error('❌ Webhook failed', err);
+    console.error('Webhook failed:', err);
     ctx.status = 500;
   }
 });
@@ -51,15 +51,21 @@ router.post('/webhooks', async (ctx) => {
 // OAuth start
 router.get('/auth', async (ctx) => {
   const shop = ctx.query.shop;
-  if (!shop) ctx.throw(400, 'Missing shop parameter');
+  if (!shop) {
+    ctx.throw(400, 'Missing shop parameter');
+    return;
+  }
   const redirectUrl = await Shopify.auth.beginAuth(
-    ctx.req, ctx.res, shop, '/auth/callback', false
+    ctx.req, ctx.res,
+    shop,
+    '/auth/callback',
+    false
   );
   ctx.redirect(redirectUrl);
   ctx.respond = false;
 });
 
-// OAuth callback & billing
+// OAuth callback + billing
 router.get('/auth/callback', async (ctx) => {
   const session = await Shopify.auth.validateAuthCallback(
     ctx.req, ctx.res, ctx.query
@@ -81,13 +87,24 @@ router.get('/auth/callback', async (ctx) => {
     const response = await client.query({
       data: {
         query: `
-          mutation subscriptionCreate($name: String!, $returnUrl: URL!, $trialDays: Int!, $price: MoneyInput!, $interval: BillingInterval!) {
+          mutation subscriptionCreate(
+            $name: String!,
+            $returnUrl: URL!,
+            $trialDays: Int!,
+            $price: MoneyInput!,
+            $interval: BillingInterval!
+          ) {
             appSubscriptionCreate(
               name: $name,
               returnUrl: $returnUrl,
               trialDays: $trialDays,
               lineItems: [{
-                plan: { appRecurringPricingDetails: { price: $price, interval: $interval } }
+                plan: {
+                  appRecurringPricingDetails: {
+                    price: $price,
+                    interval: $interval
+                  }
+                }
               }]
             ) {
               confirmationUrl
@@ -96,29 +113,31 @@ router.get('/auth/callback', async (ctx) => {
           }
         `,
         variables: {
-          name:      'Monthly Multicurrency',
-          returnUrl: `${HOST}/?billing=success`,
-          trialDays: 5,
-          price:     { amount: 14.99, currencyCode: 'USD' },
-          interval:  BillingInterval.Every30Days
+          name:       'Monthly Multicurrency',
+          returnUrl:  HOST + '/?billing=success',
+          trialDays:  5,
+          price:      { amount: 14.99, currencyCode: 'USD' },
+          interval:   BillingInterval.Every30Days
         }
       }
     });
     const { confirmationUrl, userErrors } = response.body.data.appSubscriptionCreate;
     if (userErrors.length) {
-      console.error('Billing errors', userErrors);
+      console.error('Billing errors:', userErrors);
       ctx.throw(500, 'Billing API error');
+      return;
     }
     ctx.redirect(confirmationUrl);
     ctx.respond = false;
     return;
   }
 
+  // Няма active subscription → отиваме в самото приложение
   ctx.redirect('/');
   ctx.respond = false;
 });
 
-// App Bridge entrypoint
+// App Bridge entry
 router.get('/', async (ctx) => {
   try {
     const sessionId = await Shopify.Session.getCurrentId({
@@ -128,25 +147,24 @@ router.get('/', async (ctx) => {
     });
     const session = await Shopify.Session.decode(sessionId);
 
-    ctx.body = `<!DOCTYPE html>
-<html>
-<head>
-  <script src="https://unpkg.com/@shopify/app-bridge@3.7.9"></script>
-</head>
-<body>
-  <div id="app"></div>
-  <script>
-    const createApp = window['app-bridge'].default;
-    window.app = createApp({
-      apiKey: '${SHOPIFY_API_KEY}',
-      shopOrigin: '${session.shop}'
-    });
-  </script>
-</body>
-</html>`;
-  } catch {
+    // Връщаме HTML, инжектираме apiKey и shopOrigin с конкатенация
+    ctx.body = '<!DOCTYPE html>' +
+      '<html><head>' +
+      '<script src="https://unpkg.com/@shopify/app-bridge@3.7.9"></script>' +
+      '</head><body>' +
+      '<div id="app"></div>' +
+      '<script>' +
+      'const createApp = window[\'app-bridge\'].default; ' +
+      'window.app = createApp({ ' +
+        'apiKey: \'' + SHOPIFY_API_KEY + '\', ' +
+        'shopOrigin: \'' + session.shop + '\' ' +
+      '});' +
+      '</script>' +
+      '</body></html>';
+  } catch (err) {
+    // Липсва session → OAuth flow
     const shop = ctx.query.shop || ctx.cookies.get('shopOrigin');
-    ctx.redirect(\`/auth?shop=\${shop}\`);
+    ctx.redirect('/auth?shop=' + shop);
     ctx.respond = false;
   }
 });
@@ -154,6 +172,7 @@ router.get('/', async (ctx) => {
 app.use(router.routes());
 app.use(router.allowedMethods());
 
+// Стартираме сървъра
 const PORT = parseInt(process.env.PORT, 10) || 8081;
 app.listen(PORT, function() {
   console.log('> Server listening on ' + PORT);
