@@ -1,13 +1,3 @@
-# shopify.extension.toml - ПОПРАВЕН
 name = "theme-multicurrency"
 type = "theme"
-
-# Добавете и двете extension points
 extension_points = ["order_status", "checkout_thank_you"]
-
-# Опционално: target за по-голяма гъвкавост
-[[extensions.targeting]]
-target = "order_status"
-
-[[extensions.targeting]]
-target = "checkout_thank_you"
