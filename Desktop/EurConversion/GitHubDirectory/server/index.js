@@ -423,7 +423,69 @@ router.get('/api/shop', async (ctx) => {
     }
 });
 
-// GraphQL Orders Test
+// Products API Test (за currency conversion)
+router.get('/api/products', async (ctx) => {
+    console.log('=== PRODUCTS API TEST ===');
+    try {
+        const shop = ctx.query.shop;
+        if (!shop) {
+            ctx.status = 400;
+            ctx.body = 'Missing shop parameter';
+            return;
+        }
+        
+        const sessionId = `${shop}-offline`;
+        const session = await memorySessionStorage.loadSession(sessionId);
+        
+        if (!session || !session.accessToken) {
+            ctx.status = 401;
+            ctx.body = 'Unauthorized - No valid session';
+            return;
+        }
+        
+        console.log('Fetching products for shop:', shop);
+        const response = await fetch(`https://${shop}/admin/api/2024-01/products.json?limit=5`, {
+            headers: { 
+                'X-Shopify-Access-Token': session.accessToken,
+                'Content-Type': 'application/json'
+            }
+        });
+        
+        if (!response.ok) {
+            throw new Error(`Shopify API error: ${response.status} ${response.statusText}`);
+        }
+        
+        const products = await response.json();
+        console.log(`Found ${products.products?.length || 0} products`);
+        
+        // Extract pricing info для currency conversion
+        const productPricing = products.products?.map(product => ({
+            id: product.id,
+            title: product.title,
+            vendor: product.vendor,
+            variants: product.variants?.map(variant => ({
+                id: variant.id,
+                title: variant.title,
+                price: variant.price,
+                compare_at_price: variant.compare_at_price,
+                sku: variant.sku
+            }))
+        })) || [];
+        
+        ctx.body = {
+            success: true,
+            shop: shop,
+            productsCount: products.products?.length || 0,
+            products: productPricing,
+            message: 'Products API works - useful for currency conversion!'
+        };
+        
+    } catch (error) {
+        console.error('Error fetching products:', error);
+        ctx.status = 500;
+        ctx.body = 'Failed to fetch products: ' + error.message;
+    }
+});
 router.get('/api/orders-graphql', async (ctx) => {
     console.log('=== GRAPHQL ORDERS TEST ===');
     try {
@@ -665,11 +727,15 @@ router.get('(/)', async (ctx) => {
               <h3>API Test Links:</h3>
               <ul>
                 <li><a href="/api/test?shop=${shop}" target="_blank">Test API Session</a></li>
-                <li><a href="/api/orders?shop=${shop}" target="_blank">🛍️ Test Orders API (REST - Protected)</a></li>
-                <li><a href="/api/orders-graphql?shop=${shop}" target="_blank">🛍️ Test Orders API (GraphQL)</a></li>
+                <li><a href="/api/products?shop=${shop}" target="_blank">📦 Test Products API (For Currency Conversion)</a></li>
                 <li><a href="/api/themes?shop=${shop}" target="_blank">🎨 Test Themes API</a></li>
                 <li><a href="/api/shop?shop=${shop}" target="_blank">🏪 Test Shop Info API</a></li>
                 <li><a href="/api/debug-token?shop=${shop}" target="_blank">🔍 Debug Token Permissions</a></li>
+                <li><hr></li>
+                <li><em>Orders API е блокиран за Protected Customer Data:</em></li>
+                <li><a href="/api/orders?shop=${shop}" target="_blank">🛍️ Orders API (REST - Protected) ❌</a></li>
+                <li><a href="/api/orders-graphql?shop=${shop}" target="_blank">🛍️ Orders API (GraphQL) ❌</a></li>
+                <li><hr></li>
                 <li><a href="/debug" target="_blank">Debug Info</a></li>
                 <li><a href="/health" target="_blank">Health Check</a></li>
               </ul>
