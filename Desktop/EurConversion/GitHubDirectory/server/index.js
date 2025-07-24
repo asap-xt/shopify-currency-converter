@@ -264,6 +264,165 @@ router.get('/api/test', async (ctx) => {
     }
 });
 
+// NEW TEST ROUTES - Добавете тук
+
+// Тестване на Orders API
+router.get('/api/orders', async (ctx) => {
+    console.log('=== ORDERS API TEST ===');
+    try {
+        const shop = ctx.query.shop;
+        if (!shop) {
+            ctx.status = 400;
+            ctx.body = 'Missing shop parameter';
+            return;
+        }
+        
+        const sessionId = `${shop}-offline`;
+        const session = await memorySessionStorage.loadSession(sessionId);
+        
+        if (!session || !session.accessToken) {
+            ctx.status = 401;
+            ctx.body = 'Unauthorized - No valid session';
+            return;
+        }
+        
+        console.log('Fetching orders for shop:', shop);
+        const response = await fetch(`https://${shop}/admin/api/2024-01/orders.json?limit=10`, {
+            headers: { 
+                'X-Shopify-Access-Token': session.accessToken,
+                'Content-Type': 'application/json'
+            }
+        });
+        
+        if (!response.ok) {
+            throw new Error(`Shopify API error: ${response.status} ${response.statusText}`);
+        }
+        
+        const orders = await response.json();
+        console.log(`Found ${orders.orders?.length || 0} orders`);
+        
+        ctx.body = {
+            success: true,
+            shop: shop,
+            ordersCount: orders.orders?.length || 0,
+            orders: orders.orders || []
+        };
+        
+    } catch (error) {
+        console.error('Error fetching orders:', error);
+        ctx.status = 500;
+        ctx.body = 'Failed to fetch orders: ' + error.message;
+    }
+});
+
+// Тестване на Themes API
+router.get('/api/themes', async (ctx) => {
+    console.log('=== THEMES API TEST ===');
+    try {
+        const shop = ctx.query.shop;
+        if (!shop) {
+            ctx.status = 400;
+            ctx.body = 'Missing shop parameter';
+            return;
+        }
+        
+        const sessionId = `${shop}-offline`;
+        const session = await memorySessionStorage.loadSession(sessionId);
+        
+        if (!session || !session.accessToken) {
+            ctx.status = 401;
+            ctx.body = 'Unauthorized - No valid session';
+            return;
+        }
+        
+        console.log('Fetching themes for shop:', shop);
+        const response = await fetch(`https://${shop}/admin/api/2024-01/themes.json`, {
+            headers: { 
+                'X-Shopify-Access-Token': session.accessToken,
+                'Content-Type': 'application/json'
+            }
+        });
+        
+        if (!response.ok) {
+            throw new Error(`Shopify API error: ${response.status} ${response.statusText}`);
+        }
+        
+        const themes = await response.json();
+        console.log(`Found ${themes.themes?.length || 0} themes`);
+        
+        ctx.body = {
+            success: true,
+            shop: shop,
+            themesCount: themes.themes?.length || 0,
+            themes: themes.themes?.map(theme => ({
+                id: theme.id,
+                name: theme.name,
+                role: theme.role,
+                theme_store_id: theme.theme_store_id
+            })) || []
+        };
+        
+    } catch (error) {
+        console.error('Error fetching themes:', error);
+        ctx.status = 500;
+        ctx.body = 'Failed to fetch themes: ' + error.message;
+    }
+});
+
+// Shop info API
+router.get('/api/shop', async (ctx) => {
+    console.log('=== SHOP INFO API TEST ===');
+    try {
+        const shop = ctx.query.shop;
+        if (!shop) {
+            ctx.status = 400;
+            ctx.body = 'Missing shop parameter';
+            return;
+        }
+        
+        const sessionId = `${shop}-offline`;
+        const session = await memorySessionStorage.loadSession(sessionId);
+        
+        if (!session || !session.accessToken) {
+            ctx.status = 401;
+            ctx.body = 'Unauthorized - No valid session';
+            return;
+        }
+        
+        console.log('Fetching shop info for:', shop);
+        const response = await fetch(`https://${shop}/admin/api/2024-01/shop.json`, {
+            headers: { 
+                'X-Shopify-Access-Token': session.accessToken,
+                'Content-Type': 'application/json'
+            }
+        });
+        
+        if (!response.ok) {
+            throw new Error(`Shopify API error: ${response.status} ${response.statusText}`);
+        }
+        
+        const shopData = await response.json();
+        console.log('Shop info retrieved successfully');
+        
+        ctx.body = {
+            success: true,
+            shop: {
+                name: shopData.shop.name,
+                domain: shopData.shop.domain,
+                currency: shopData.shop.currency,
+                country: shopData.shop.country,
+                timezone: shopData.shop.timezone,
+                plan_name: shopData.shop.plan_name
+            }
+        };
+        
+    } catch (error) {
+        console.error('Error fetching shop info:', error);
+        ctx.status = 500;
+        ctx.body = 'Failed to fetch shop info: ' + error.message;
+    }
+});
+
 // Middleware за всички останали заявки, за да се покаже главната страница
 router.get('(/)', async (ctx) => {
     console.log('=== MAIN ROUTE ===');
@@ -316,6 +475,9 @@ router.get('(/)', async (ctx) => {
               <h3>API Test Links:</h3>
               <ul>
                 <li><a href="/api/test?shop=${shop}" target="_blank">Test API Session</a></li>
+                <li><a href="/api/orders?shop=${shop}" target="_blank">🛍️ Test Orders API</a></li>
+                <li><a href="/api/themes?shop=${shop}" target="_blank">🎨 Test Themes API</a></li>
+                <li><a href="/api/shop?shop=${shop}" target="_blank">🏪 Test Shop Info API</a></li>
                 <li><a href="/debug" target="_blank">Debug Info</a></li>
                 <li><a href="/health" target="_blank">Health Check</a></li>
               </ul>
