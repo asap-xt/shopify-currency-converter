@@ -33,8 +33,15 @@ const PORT = process.env.PORT || 3000;
 
 console.log(`Attempting to start server on port ${PORT}...`);
 
-app.listen(PORT, () => {
-  console.log(`✓ MINIMAL SERVER RUNNING ON PORT ${PORT}`);
+// Health check route
+router.get('/health', async (ctx) => {
+  console.log('Health check accessed');
+  ctx.body = 'OK';
+});
+
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`✓ MINIMAL SERVER RUNNING ON PORT ${PORT} (bound to 0.0.0.0)`);
+  console.log(`✓ Health check: https://shopify-currency-converter.railway.app/health`);
 }).on('error', (err) => {
   console.error('FATAL: Server failed to start:', err);
 });
