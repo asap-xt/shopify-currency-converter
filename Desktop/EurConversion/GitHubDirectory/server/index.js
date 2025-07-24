@@ -147,17 +147,18 @@ router.get('/auth', async (ctx) => {
   }
   
   try {
-    console.log('Calling Shopify.auth.beginAuth...');
-    const redirectUrl = await Shopify.auth.beginAuth(
-      ctx.req, ctx.res,
-      shop,
-      '/auth/callback',
-      false // false за offline access token
-    );
-    console.log('Redirect URL generated:', redirectUrl);
-    ctx.redirect(redirectUrl);
+    console.log('Creating OAuth URL...');
+    // За версия 11.x използваме директно OAuth URL
+    const authUrl = `https://${shop}/admin/oauth/authorize?` + 
+      `client_id=${SHOPIFY_API_KEY}&` +
+      `scope=${SCOPES}&` +
+      `redirect_uri=${encodeURIComponent(HOST + '/auth/callback')}&` +
+      `state=${Math.random().toString(36).substring(7)}`;
+    
+    console.log('OAuth URL generated:', authUrl);
+    ctx.redirect(authUrl);
   } catch (error) {
-    console.error('Error in beginAuth:', error);
+    console.error('Error creating OAuth URL:', error);
     ctx.status = 500;
     ctx.body = 'Auth initialization failed: ' + error.message;
   }
@@ -168,20 +169,57 @@ router.get('/auth/callback', async (ctx) => {
     console.log('=== AUTH CALLBACK ===');
     console.log('Callback query:', ctx.query);
     
+    const { code, hmac, shop, state, timestamp } = ctx.query;
+    
+    if (!code || !shop) {
+        console.error('Missing required OAuth parameters');
+        ctx.status = 400;
+        ctx.body = 'Missing required OAuth parameters';
+        return;
+    }
+    
     try {
-        console.log('Validating auth callback...');
-        const session = await Shopify.auth.validateAuthCallback(
-            ctx.req, ctx.res, ctx.query
-        );
-        console.log('Auth successful for shop:', session.shop);
-
-        // Тук можеш да добавиш логиката за проверка на билинга, както беше преди.
-        // За простота, сега просто ще пренасочим.
+        console.log('Exchanging code for access token...');
+        
+        // Exchange code за access token
+        const tokenResponse = await fetch(`https://${shop}/admin/oauth/access_token`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                client_id: SHOPIFY_API_KEY,
+                client_secret: SHOPIFY_API_SECRET,
+                code: code,
+            }),
+        });
+        
+        if (!tokenResponse.ok) {
+            throw new Error(`Token exchange failed: ${tokenResponse.status}`);
+        }
+        
+        const tokenData = await tokenResponse.json();
+        console.log('Token exchange successful for shop:', shop);
+        
+        // Създаваме сесия
+        const session = new Session.Session({
+            id: `${shop}-offline`,
+            shop: shop,
+            state: state,
+            isOnline: false,
+            accessToken: tokenData.access_token,
+            scope: tokenData.scope,
+        });
+        
+        // Записваме сесията
+        await memorySessionStorage.storeSession(session);
+        console.log('Session stored successfully');
         
         // Пренасочване към приложението
-        const redirectUrl = `/?shop=${session.shop}&host=${ctx.query.host}`;
+        const redirectUrl = `/?shop=${shop}&host=${ctx.query.host}`;
         console.log('Redirecting to:', redirectUrl);
         ctx.redirect(redirectUrl);
+        
     } catch (error) {
         console.error("Auth callback failed:", error);
         ctx.status = 500;
@@ -193,21 +231,31 @@ router.get('/auth/callback', async (ctx) => {
 router.get('/api/test', async (ctx) => {
     console.log('=== API TEST ===');
     try {
-        const session = await Shopify.Utils.loadCurrentSession(ctx.req, ctx.res);
-        if (session) {
+        const shop = ctx.query.shop;
+        if (!shop) {
+            ctx.status = 400;
+            ctx.body = 'Missing shop parameter';
+            return;
+        }
+        
+        const sessionId = `${shop}-offline`;
+        const session = await memorySessionStorage.loadSession(sessionId);
+        
+        if (session && session.accessToken) {
             console.log('Session found:', session.shop);
             ctx.body = { 
               message: 'Success!', 
               session: { 
                 shop: session.shop, 
                 scope: session.scope,
-                isOnline: session.isOnline 
+                isOnline: session.isOnline,
+                hasAccessToken: !!session.accessToken
               } 
             };
         } else {
-            console.log('No session found');
+            console.log('No session found for shop:', shop);
             ctx.status = 401;
-            ctx.body = 'Unauthorized';
+            ctx.body = 'Unauthorized - No valid session';
         }
     } catch (error) {
         console.error('Error in API test:', error);
@@ -223,24 +271,22 @@ router.get('(/)', async (ctx) => {
     console.log('Shop parameter:', shop);
 
     try {
-        // Проверка дали имаме активна сесия
-        const sessionId = await Shopify.Session.getCurrentId({
-            isOnline: false,
-            rawRequest: ctx.req,
-            rawResponse: ctx.res,
-        });
-        console.log('Session ID:', sessionId);
+        if (!shop) {
+            console.log('No shop parameter');
+            ctx.body = "Missing shop parameter. Please install the app through Shopify.";
+            ctx.status = 400;
+            return;
+        }
 
-        if (!sessionId) {
-            // Ако няма сесия, а има `shop` параметър, пращаме към auth
-            if (shop) {
-                console.log('No session, redirecting to auth');
-                ctx.redirect(`/auth?shop=${shop}`);
-            } else {
-                console.log('No session and no shop parameter');
-                ctx.body = "Missing shop parameter. Please install the app through Shopify.";
-                ctx.status = 400;
-            }
+        // Проверка дали имаме активна сесия
+        const sessionId = `${shop}-offline`;
+        const session = await memorySessionStorage.loadSession(sessionId);
+        console.log('Session check for:', sessionId, session ? 'FOUND' : 'NOT FOUND');
+
+        if (!session || !session.accessToken) {
+            // Ако няма сесия, пращаме към auth
+            console.log('No valid session, redirecting to auth');
+            ctx.redirect(`/auth?shop=${shop}`);
             return;
         }
         
@@ -263,12 +309,13 @@ router.get('(/)', async (ctx) => {
               <h1>🎉 Currency Converter App is running!</h1>
               <p><strong>Shop:</strong> ${shop}</p>
               <p><strong>Session ID:</strong> ${sessionId}</p>
+              <p><strong>Access Token:</strong> ${session.accessToken ? '✅ Present' : '❌ Missing'}</p>
+              <p><strong>Scopes:</strong> ${session.scope || SCOPES}</p>
               <p><strong>Timestamp:</strong> ${new Date().toISOString()}</p>
-              <p><strong>Scopes:</strong> ${SCOPES}</p>
               <hr>
               <h3>API Test Links:</h3>
               <ul>
-                <li><a href="/api/test" target="_blank">Test API Session</a></li>
+                <li><a href="/api/test?shop=${shop}" target="_blank">Test API Session</a></li>
                 <li><a href="/debug" target="_blank">Debug Info</a></li>
                 <li><a href="/health" target="_blank">Health Check</a></li>
               </ul>
