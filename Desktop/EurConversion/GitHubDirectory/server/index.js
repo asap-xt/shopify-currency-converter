@@ -5,7 +5,8 @@ import Koa from 'koa';
 import session from 'koa-session';
 import Router from 'koa-router';
 import getRawBody from 'raw-body';
-import { shopifyApi, LATEST_API_VERSION, BillingInterval } from '@shopify/shopify-api';
+// ПРОМЯНА 1: Добавяме MemorySessionStorage към импорта
+import { shopifyApi, LATEST_API_VERSION, BillingInterval, MemorySessionStorage } from '@shopify/shopify-api';
 
 const {
   SHOPIFY_API_KEY,
@@ -23,7 +24,8 @@ const Shopify = shopifyApi({
   hostName:       HOST_NAME,
   apiVersion:     LATEST_API_VERSION,
   isEmbeddedApp:  true,
-  sessionStorage: new Shopify.Session.MemorySessionStorage()
+  // ПРОМЯНА 2: Използваме директно MemorySessionStorage
+  sessionStorage: new MemorySessionStorage()
 });
 
 const app = new Koa();
@@ -132,7 +134,7 @@ router.get('/auth/callback', async (ctx) => {
     return;
   }
 
-  // Няма active subscription → отиваме в самото приложение
+  // Има active subscription → отиваме в самото приложение
   ctx.redirect('/');
   ctx.respond = false;
 });
