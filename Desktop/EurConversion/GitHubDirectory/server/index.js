@@ -452,6 +452,7 @@ router.get('/api/orders-graphql', async (ctx) => {
                 id
                 name
                 createdAt
+                updatedAt
                 totalPriceSet {
                   shopMoney {
                     amount
@@ -459,8 +460,20 @@ router.get('/api/orders-graphql', async (ctx) => {
                   }
                 }
                 currencyCode
-                financialStatus
-                fulfillmentStatus
+                displayFinancialStatus
+                displayFulfillmentStatus
+                subtotalPriceSet {
+                  shopMoney {
+                    amount
+                    currencyCode
+                  }
+                }
+                totalTaxSet {
+                  shopMoney {
+                    amount
+                    currencyCode
+                  }
+                }
               }
             }
           }
