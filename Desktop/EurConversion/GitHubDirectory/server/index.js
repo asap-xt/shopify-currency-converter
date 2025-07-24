@@ -423,7 +423,122 @@ router.get('/api/shop', async (ctx) => {
     }
 });
 
-// Products API Test (за currency conversion)
+// Comprehensive API Test - проверява какво работи
+router.get('/api/test-all', async (ctx) => {
+    console.log('=== COMPREHENSIVE API TEST ===');
+    try {
+        const shop = ctx.query.shop;
+        if (!shop) {
+            ctx.status = 400;
+            ctx.body = 'Missing shop parameter';
+            return;
+        }
+        
+        const sessionId = `${shop}-offline`;
+        const session = await memorySessionStorage.loadSession(sessionId);
+        
+        if (!session || !session.accessToken) {
+            ctx.status = 401;
+            ctx.body = 'Unauthorized - No valid session';
+            return;
+        }
+        
+        const results = {};
+        
+        // List of API endpoints to test
+        const apiTests = [
+            { name: 'shop', url: '/admin/api/2024-01/shop.json' },
+            { name: 'themes', url: '/admin/api/2024-01/themes.json' },
+            { name: 'orders_count', url: '/admin/api/2024-01/orders/count.json' },
+            { name: 'products_count', url: '/admin/api/2024-01/products/count.json' },
+            { name: 'products', url: '/admin/api/2024-01/products.json?limit=1' },
+            { name: 'orders', url: '/admin/api/2024-01/orders.json?limit=1' },
+            { name: 'locations', url: '/admin/api/2024-01/locations.json' },
+            { name: 'webhooks', url: '/admin/api/2024-01/webhooks.json' },
+            { name: 'scriptTags', url: '/admin/api/2024-01/script_tags.json' },
+            { name: 'assets', url: '/admin/api/2024-01/themes/' + (await getMainThemeId(shop, session.accessToken)) + '/assets.json' },
+        ];
+        
+        for (const test of apiTests) {
+            try {
+                if (test.name === 'assets' && !test.url.includes('undefined')) {
+                    // Skip assets test if no theme ID
+                    continue;
+                }
+                
+                const response = await fetch(`https://${shop}${test.url}`, {
+                    headers: { 
+                        'X-Shopify-Access-Token': session.accessToken,
+                        'Content-Type': 'application/json'
+                    }
+                });
+                
+                let responseData = null;
+                const responseText = await response.text();
+                
+                if (response.ok && responseText) {
+                    try {
+                        responseData = JSON.parse(responseText);
+                    } catch (e) {
+                        responseData = responseText;
+                    }
+                }
+                
+                results[test.name] = {
+                    status: response.status,
+                    success: response.ok,
+                    error: response.ok ? null : `${response.status} ${response.statusText}`,
+                    hasData: !!responseData,
+                    dataKeys: responseData && typeof responseData === 'object' ? Object.keys(responseData) : null,
+                    sampleResponse: responseText.length > 200 ? responseText.substring(0, 200) + '...' : responseText
+                };
+                
+                console.log(`API Test ${test.name}: ${response.status}`);
+                
+            } catch (error) {
+                results[test.name] = {
+                    success: false,
+                    error: error.message
+                };
+            }
+        }
+        
+        ctx.body = {
+            shop: shop,
+            sessionScope: session.scope,
+            message: 'Comprehensive API test results',
+            results: results,
+            workingAPIs: Object.keys(results).filter(key => results[key].success),
+            blockedAPIs: Object.keys(results).filter(key => !results[key].success)
+        };
+        
+    } catch (error) {
+        console.error('Error in comprehensive API test:', error);
+        ctx.status = 500;
+        ctx.body = 'Comprehensive test failed: ' + error.message;
+    }
+});
+
+// Helper function to get main theme ID
+async function getMainThemeId(shop, accessToken) {
+    try {
+        const response = await fetch(`https://${shop}/admin/api/2024-01/themes.json`, {
+            headers: { 
+                'X-Shopify-Access-Token': accessToken,
+                'Content-Type': 'application/json'
+            }
+        });
+        
+        if (response.ok) {
+            const themes = await response.json();
+            const mainTheme = themes.themes?.find(theme => theme.role === 'main');
+            return mainTheme?.id || 'undefined';
+        }
+        return 'undefined';
+    } catch (error) {
+        return 'undefined';
+    }
+}
 router.get('/api/products', async (ctx) => {
     console.log('=== PRODUCTS API TEST ===');
     try {
@@ -727,15 +842,17 @@ router.get('(/)', async (ctx) => {
               <h3>API Test Links:</h3>
               <ul>
                 <li><a href="/api/test?shop=${shop}" target="_blank">Test API Session</a></li>
-                <li><a href="/api/products?shop=${shop}" target="_blank">📦 Test Products API (For Currency Conversion)</a></li>
-                <li><a href="/api/themes?shop=${shop}" target="_blank">🎨 Test Themes API</a></li>
-                <li><a href="/api/shop?shop=${shop}" target="_blank">🏪 Test Shop Info API</a></li>
+                <li><a href="/api/test-all?shop=${shop}" target="_blank">🔍 Test ALL APIs (Comprehensive)</a></li>
+                <li><hr></li>
+                <li><strong>Known Working APIs:</strong></li>
+                <li><a href="/api/themes?shop=${shop}" target="_blank">🎨 Themes API ✅</a></li>
+                <li><a href="/api/shop?shop=${shop}" target="_blank">🏪 Shop Info API ✅</a></li>
+                <li><hr></li>
+                <li><strong>Blocked APIs (Protected Customer Data):</strong></li>
+                <li><a href="/api/orders?shop=${shop}" target="_blank">🛍️ Orders API ❌</a></li>
+                <li><a href="/api/products?shop=${shop}" target="_blank">📦 Products API ❌</a></li>
+                <li><hr></li>
                 <li><a href="/api/debug-token?shop=${shop}" target="_blank">🔍 Debug Token Permissions</a></li>
-                <li><hr></li>
-                <li><em>Orders API е блокиран за Protected Customer Data:</em></li>
-                <li><a href="/api/orders?shop=${shop}" target="_blank">🛍️ Orders API (REST - Protected) ❌</a></li>
-                <li><a href="/api/orders-graphql?shop=${shop}" target="_blank">🛍️ Orders API (GraphQL) ❌</a></li>
-                <li><hr></li>
                 <li><a href="/debug" target="_blank">Debug Info</a></li>
                 <li><a href="/health" target="_blank">Health Check</a></li>
               </ul>
