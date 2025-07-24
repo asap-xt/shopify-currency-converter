@@ -423,7 +423,89 @@ router.get('/api/shop', async (ctx) => {
     }
 });
 
-// DEBUG: Check actual token permissions
+// GraphQL Orders Test
+router.get('/api/orders-graphql', async (ctx) => {
+    console.log('=== GRAPHQL ORDERS TEST ===');
+    try {
+        const shop = ctx.query.shop;
+        if (!shop) {
+            ctx.status = 400;
+            ctx.body = 'Missing shop parameter';
+            return;
+        }
+        
+        const sessionId = `${shop}-offline`;
+        const session = await memorySessionStorage.loadSession(sessionId);
+        
+        if (!session || !session.accessToken) {
+            ctx.status = 401;
+            ctx.body = 'Unauthorized - No valid session';
+            return;
+        }
+        
+        // GraphQL query за orders без лични данни
+        const query = `
+        {
+          orders(first: 10) {
+            edges {
+              node {
+                id
+                name
+                createdAt
+                totalPriceSet {
+                  shopMoney {
+                    amount
+                    currencyCode
+                  }
+                }
+                currencyCode
+                financialStatus
+                fulfillmentStatus
+              }
+            }
+          }
+        }`;
+        
+        console.log('Fetching orders via GraphQL for shop:', shop);
+        const response = await fetch(`https://${shop}/admin/api/2024-01/graphql.json`, {
+            method: 'POST',
+            headers: { 
+                'X-Shopify-Access-Token': session.accessToken,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ query })
+        });
+        
+        if (!response.ok) {
+            throw new Error(`Shopify GraphQL API error: ${response.status} ${response.statusText}`);
+        }
+        
+        const result = await response.json();
+        console.log('GraphQL orders retrieved successfully');
+        
+        if (result.errors) {
+            ctx.body = {
+                success: false,
+                shop: shop,
+                errors: result.errors
+            };
+        } else {
+            const orders = result.data.orders.edges.map(edge => edge.node);
+            ctx.body = {
+                success: true,
+                shop: shop,
+                ordersCount: orders.length,
+                orders: orders,
+                message: 'Orders retrieved via GraphQL (no customer data)'
+            };
+        }
+        
+    } catch (error) {
+        console.error('Error fetching orders via GraphQL:', error);
+        ctx.status = 500;
+        ctx.body = 'Failed to fetch orders via GraphQL: ' + error.message;
+    }
+});
 router.get('/api/debug-token', async (ctx) => {
     console.log('=== TOKEN DEBUG ===');
     try {
@@ -570,7 +652,8 @@ router.get('(/)', async (ctx) => {
               <h3>API Test Links:</h3>
               <ul>
                 <li><a href="/api/test?shop=${shop}" target="_blank">Test API Session</a></li>
-                <li><a href="/api/orders?shop=${shop}" target="_blank">🛍️ Test Orders API</a></li>
+                <li><a href="/api/orders?shop=${shop}" target="_blank">🛍️ Test Orders API (REST - Protected)</a></li>
+                <li><a href="/api/orders-graphql?shop=${shop}" target="_blank">🛍️ Test Orders API (GraphQL)</a></li>
                 <li><a href="/api/themes?shop=${shop}" target="_blank">🎨 Test Themes API</a></li>
                 <li><a href="/api/shop?shop=${shop}" target="_blank">🏪 Test Shop Info API</a></li>
                 <li><a href="/api/debug-token?shop=${shop}" target="_blank">🔍 Debug Token Permissions</a></li>
