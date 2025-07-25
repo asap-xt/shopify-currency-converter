@@ -2,6 +2,7 @@
 import 'dotenv/config';
 import '@shopify/shopify-api/adapters/node';
 import Koa from 'koa';
+import cors from '@koa/cors'; // Use import style for CORS
 import koaSession from 'koa-session'; // преименувах го, за да не се бърка с обекта от Shopify
 import Router from 'koa-router';
 import getRawBody from 'raw-body';
@@ -88,13 +89,10 @@ try {
   process.exit(1);
 }
 
-const Koa = require('koa');
-const cors = require('@koa/cors'); // Добави този ред, ако още го няма
-
 const app = new Koa();
 app.keys = [SHOPIFY_API_SECRET];
 
-// Добави това веднага след създаването на app:
+// Add CORS for Shopify extensions
 app.use(cors({
   origin: 'https://extensions.shopifycdn.com'
 }));
