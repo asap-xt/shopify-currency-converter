@@ -839,46 +839,266 @@ router.get('(/)', async (ctx) => {
         console.log('Session found, showing app interface');
         // Ако има сесия, показваме HTML
         ctx.set('Content-Type', 'text/html');
-        ctx.body = `
-            <!DOCTYPE html>
-            <html>
-            <head>
-              <script src="https://unpkg.com/@shopify/app-bridge@3"></script>
-              <script>
-                const app = AppBridge.createApp({
-                  apiKey: '${SHOPIFY_API_KEY}',
-                  host: new URL(location.href).searchParams.get("host"),
-                });
-              </script>
-            </head>
-            <body>
-              <h1>🎉 Currency Converter App is running!</h1>
-              <p><strong>Shop:</strong> ${shop}</p>
-              <p><strong>Session ID:</strong> ${sessionId}</p>
-              <p><strong>Access Token:</strong> ${session.accessToken ? '✅ Present' : '❌ Missing'}</p>
-              <p><strong>Scopes:</strong> ${session.scope || SCOPES}</p>
-              <p><strong>Timestamp:</strong> ${new Date().toISOString()}</p>
-              <hr>
-              <h3>API Test Links:</h3>
-              <ul>
-                <li><a href="/api/test?shop=${shop}" target="_blank">Test API Session</a></li>
-                <li><a href="/api/test-all?shop=${shop}" target="_blank">🔍 Test ALL APIs (Comprehensive)</a></li>
-                <li><hr></li>
-                <li><strong>Known Working APIs:</strong></li>
-                <li><a href="/api/themes?shop=${shop}" target="_blank">🎨 Themes API ✅</a></li>
-                <li><a href="/api/shop?shop=${shop}" target="_blank">🏪 Shop Info API ✅</a></li>
-                <li><hr></li>
-                <li><strong>Blocked APIs (Protected Customer Data):</strong></li>
-                <li><a href="/api/orders?shop=${shop}" target="_blank">🛍️ Orders API ❌</a></li>
-                <li><a href="/api/products?shop=${shop}" target="_blank">📦 Products API ❌</a></li>
-                <li><hr></li>
-                <li><a href="/api/debug-token?shop=${shop}" target="_blank">🔍 Debug Token Permissions</a></li>
-                <li><a href="/debug" target="_blank">Debug Info</a></li>
-                <li><a href="/health" target="_blank">Health Check</a></li>
-              </ul>
-            </body>
-            </html>
-          `;
+        ctx.body = `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>BGN↔EUR Currency Display</title>
+  <script src="https://unpkg.com/@shopify/app-bridge@3"></script>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      margin: 0;
+      padding: 0;
+      background: #f4f6f8;
+      color: #202223;
+    }
+    .container {
+      max-width: 800px;
+      margin: 0 auto;
+      padding: 20px;
+    }
+    .header {
+      background: white;
+      border-radius: 12px;
+      padding: 30px;
+      text-align: center;
+      box-shadow: 0 0 0 1px rgba(0,0,0,0.05), 0 1px 3px rgba(0,0,0,0.1);
+      margin-bottom: 20px;
+    }
+    .header h1 {
+      margin: 0 0 10px 0;
+      font-size: 28px;
+      font-weight: 600;
+    }
+    .header p {
+      color: #616161;
+      margin: 0;
+      font-size: 16px;
+    }
+    .card {
+      background: white;
+      border-radius: 8px;
+      padding: 24px;
+      margin-bottom: 16px;
+      box-shadow: 0 0 0 1px rgba(0,0,0,0.05), 0 1px 3px rgba(0,0,0,0.1);
+    }
+    .card h2 {
+      margin: 0 0 16px 0;
+      font-size: 20px;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .steps {
+      counter-reset: step-counter;
+      list-style: none;
+      padding: 0;
+      margin: 0;
+    }
+    .steps li {
+      margin-bottom: 16px;
+      padding-left: 40px;
+      position: relative;
+      counter-increment: step-counter;
+    }
+    .steps li::before {
+      content: counter(step-counter);
+      position: absolute;
+      left: 0;
+      top: 0;
+      width: 28px;
+      height: 28px;
+      background: #008060;
+      color: white;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 600;
+      font-size: 14px;
+    }
+    .feature-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 16px;
+      margin-top: 16px;
+    }
+    .feature {
+      display: flex;
+      align-items: flex-start;
+      gap: 12px;
+    }
+    .feature-icon {
+      font-size: 24px;
+      line-height: 1;
+    }
+    .feature-text h3 {
+      margin: 0 0 4px 0;
+      font-size: 16px;
+      font-weight: 600;
+    }
+    .feature-text p {
+      margin: 0;
+      color: #616161;
+      font-size: 14px;
+    }
+    .badge {
+      display: inline-block;
+      padding: 4px 12px;
+      background: #f3f4f6;
+      border-radius: 20px;
+      font-size: 12px;
+      font-weight: 500;
+      margin-right: 8px;
+    }
+    .badge.new {
+      background: #e3f5ff;
+      color: #004c99;
+    }
+    .warning {
+      background: #fff4e5;
+      border: 1px solid #ffea8a;
+      border-radius: 8px;
+      padding: 16px;
+      margin: 16px 0;
+      display: flex;
+      align-items: flex-start;
+      gap: 12px;
+    }
+    .warning-icon {
+      font-size: 20px;
+      line-height: 1;
+    }
+    .footer {
+      text-align: center;
+      color: #616161;
+      font-size: 14px;
+      margin-top: 40px;
+    }
+    .debug-section {
+      background: #f9fafb;
+      border: 1px solid #e1e3e5;
+      border-radius: 6px;
+      padding: 16px;
+      margin-top: 20px;
+    }
+    .debug-links {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 12px;
+    }
+    .debug-links a {
+      font-size: 12px;
+      color: #2c6ecb;
+      text-decoration: none;
+      padding: 4px 8px;
+      background: white;
+      border: 1px solid #e1e3e5;
+      border-radius: 4px;
+    }
+    .debug-links a:hover {
+      background: #f3f4f6;
+    }
+  </style>
+  <script>
+    const app = window['app-bridge'].createApp({
+      apiKey: '${SHOPIFY_API_KEY}',
+      host: new URL(location.href).searchParams.get("host"),
+    });
+  </script>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>🇧🇬 BGN↔EUR Currency Display 🇪🇺</h1>
+      <p>Показвайте цените едновременно в лева и евро на Thank You страницата</p>
+    </div>
+
+    <div class="card">
+      <h2>📋 Инструкции за инсталация</h2>
+      <ol class="steps">
+        <li>
+          <strong>Отидете в Theme Customizer</strong><br>
+          <span style="color: #616161;">Online Store → Themes → Customize</span>
+        </li>
+        <li>
+          <strong>Навигирайте до Thank You страницата</strong><br>
+          <span style="color: #616161;">Settings → Checkout → Thank you page</span>
+        </li>
+        <li>
+          <strong>Добавете приложението</strong><br>
+          <span style="color: #616161;">Add block → Apps → BGN↔EUR Currency Display</span>
+        </li>
+        <li>
+          <strong>Запазете промените</strong><br>
+          <span style="color: #616161;">Кликнете Save в горния десен ъгъл</span>
+        </li>
+      </ol>
+    </div>
+
+    <div class="card">
+      <h2>🎯 Как работи</h2>
+      <div class="feature-grid">
+        <div class="feature">
+          <div class="feature-icon">💰</div>
+          <div class="feature-text">
+            <h3>Двойно показване</h3>
+            <p>Всички цени се показват едновременно в BGN и EUR</p>
+          </div>
+        </div>
+        <div class="feature">
+          <div class="feature-icon">🔢</div>
+          <div class="feature-text">
+            <h3>Фиксиран курс</h3>
+            <p>1 EUR = 1.95583 BGN според БНБ</p>
+          </div>
+        </div>
+        <div class="feature">
+          <div class="feature-icon">📦</div>
+          <div class="feature-text">
+            <h3>Пълна разбивка</h3>
+            <p>Продукти, доставка и обща сума</p>
+          </div>
+        </div>
+      </div>
+      
+      <div class="warning">
+        <div class="warning-icon">⚠️</div>
+        <div>
+          <strong>Важно:</strong> Приложението работи само за поръчки в български лева (BGN) с адрес на доставка в България.
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>🚀 Предстоящи функции</h2>
+      <div style="margin-bottom: 16px;">
+        <span class="badge new">СКОРО</span>
+        <strong>Order Status Page</strong>
+        <p style="margin: 8px 0 0 0; color: #616161;">
+          Разширяваме функционалността и към страницата за статус на поръчката.
+        </p>
+      </div>
+      
+      <div>
+        <span class="badge">2026</span>
+        <strong>Автоматично преминаване към EUR</strong>
+        <p style="margin: 8px 0 0 0; color: #616161;">
+          След 01.01.2026 г. приложението автоматично ще превключи да показва EUR като основна валута.
+        </p>
+      </div>
+    </div>
+
+    <div class="footer">
+      <p>BGN↔EUR Currency Display v1.0 • Създадено за български онлайн магазини</p>
+    </div>
+  </div>
+</body>
+</html>`;
     } catch (error) {
         console.error('Error in main route:', error);
         ctx.status = 500;
