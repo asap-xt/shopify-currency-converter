@@ -944,11 +944,15 @@ router.get('/api/debug-token', async (ctx) => {
     }
 });
 
+// Заменете main route (около ред 990) с този код:
+
 // Middleware за всички останали заявки, за да се покаже главната страница
 router.get('(/)', async (ctx) => {
     console.log('=== MAIN ROUTE ===');
     const shop = ctx.query.shop;
+    const host = ctx.query.host;
     console.log('Shop parameter:', shop);
+    console.log('Host parameter:', host);
 
     try {
         if (!shop) {
@@ -963,59 +967,150 @@ router.get('(/)', async (ctx) => {
         const session = await memorySessionStorage.loadSession(sessionId);
         console.log('Session check for:', sessionId, session ? 'FOUND' : 'NOT FOUND');
 
-        if (!session || !session.accessToken) {
-            // Ако няма сесия, пращаме към auth
-            console.log('No valid session, redirecting to auth');
-            ctx.redirect(`/auth?shop=${shop}`);
-            return;
-        }
-        
-        console.log('Session found, showing app interface');
-        // Ако има сесия, показваме HTML
+        // За embedded apps винаги показваме interface
         ctx.set('Content-Type', 'text/html');
+        ctx.set('Content-Security-Policy', `frame-ancestors https://${shop} https://admin.shopify.com`);
+        
         ctx.body = `
             <!DOCTYPE html>
             <html>
             <head>
+              <meta charset="utf-8">
+              <meta name="viewport" content="width=device-width, initial-scale=1">
               <script src="https://unpkg.com/@shopify/app-bridge@3"></script>
-              <script>
-                const app = AppBridge.createApp({
-                  apiKey: '${SHOPIFY_API_KEY}',
-                  host: new URL(location.href).searchParams.get("host"),
-                });
-              </script>
+              <style>
+                body {
+                  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+                  padding: 0;
+                  margin: 0;
+                  background: #f4f6f8;
+                }
+                .container {
+                  max-width: 800px;
+                  margin: 0 auto;
+                  padding: 20px;
+                }
+                .card {
+                  background: white;
+                  border-radius: 8px;
+                  padding: 24px;
+                  margin-bottom: 20px;
+                  box-shadow: 0 0 0 1px rgba(63,63,68,.05), 0 1px 3px 0 rgba(63,63,68,.15);
+                }
+                h1 {
+                  color: #202223;
+                  font-size: 20px;
+                  font-weight: 600;
+                  margin: 0 0 16px 0;
+                }
+                .status {
+                  display: flex;
+                  align-items: center;
+                  gap: 8px;
+                  margin-bottom: 12px;
+                }
+                .status-icon {
+                  width: 20px;
+                  height: 20px;
+                }
+                .section-title {
+                  font-weight: 600;
+                  margin: 20px 0 12px 0;
+                  color: #202223;
+                }
+                ul {
+                  margin: 0;
+                  padding-left: 20px;
+                }
+                li {
+                  margin: 8px 0;
+                  color: #616161;
+                }
+                .success { color: #008060; }
+                .warning { color: #b98900; }
+                .error { color: #d72c0d; }
+                a {
+                  color: #2c6ecb;
+                  text-decoration: none;
+                }
+                a:hover {
+                  text-decoration: underline;
+                }
+                .debug-section {
+                  background: #f9fafb;
+                  border: 1px solid #e1e3e5;
+                  border-radius: 6px;
+                  padding: 16px;
+                  margin-top: 20px;
+                }
+              </style>
             </head>
             <body>
-              <h1>🎉 Currency Converter App is running!</h1>
-              <p><strong>Shop:</strong> ${shop}</p>
-              <p><strong>Session ID:</strong> ${sessionId}</p>
-              <p><strong>Access Token:</strong> ${session.accessToken ? '✅ Present' : '❌ Missing'}</p>
-              <p><strong>Scopes:</strong> ${session.scope || SCOPES}</p>
-              <p><strong>Timestamp:</strong> ${new Date().toISOString()}</p>
-              <hr>
-              <h3>Extension Status:</h3>
-              <ul>
-                <li>✅ Thank You page - Currency converter active</li>
-                <li>🔄 Order Status page - In development</li>
-              </ul>
-              <hr>
-              <h3>API Test Links:</h3>
-              <ul>
-                <li><a href="/api/test?shop=${shop}" target="_blank">Test API Session</a></li>
-                <li><a href="/api/test-all?shop=${shop}" target="_blank">🔍 Test ALL APIs (Comprehensive)</a></li>
-                <li><hr></li>
-                <li><strong>Known Working APIs:</strong></li>
-                <li><a href="/api/themes?shop=${shop}" target="_blank">🎨 Themes API ✅</a></li>
-                <li><a href="/api/shop?shop=${shop}" target="_blank">🏪 Shop Info API ✅</a></li>
-                <li><hr></li>
-                <li><strong>Blocked APIs (Protected Customer Data):</strong></li>
-                <li><a href="/api/orders?shop=${shop}" target="_blank">🛍️ Orders API ❌</a></li>
-                <li><a href="/api/products?shop=${shop}" target="_blank">📦 Products API ❌</a></li>
-                <li><hr></li>
-                <li><a href="/api/debug-token?shop=${shop}" target="_blank">🔍 Debug Token Permissions</a></li>
-                <li><a href="/debug" target="_blank">Debug Info</a></li>
-                <li><a href="/health" target="_blank">Health Check</a></li>
-              </ul>
+              <div class="container">
+                <div class="card">
+                  <h1>🎉 EuroZone Currency Converter</h1>
+                  
+                  <div class="status">
+                    <span class="status-icon">🏪</span>
+                    <span>Shop: <strong>${shop}</strong></span>
+                  </div>
+                  
+                  <div class="status">
+                    <span class="status-icon">${session && session.accessToken ? '✅' : '❌'}</span>
+                    <span class="${session && session.accessToken ? 'success' : 'error'}">
+                      Authentication: ${session && session.accessToken ? 'Active' : 'Not authenticated'}
+                    </span>
+                  </div>
+                  
+                  <div class="section-title">📦 Extension Status</div>
+                  <ul>
+                    <li class="success">✅ Thank You page - Currency converter is active and working</li>
+                    <li class="warning">⚠️ Order Status page - Extension installed but data fetch issues</li>
+                  </ul>
+                  
+                  <div class="section-title">📝 Known Issues</div>
+                  <ul>
+                    <li>Order Status page doesn't have access to price data through the API</li>
+                    <li>Working on alternative solutions to display converted prices</li>
+                  </ul>
+                  
+                  ${!session || !session.accessToken ? `
+                    <div class="debug-section">
+                      <div class="section-title">🔧 Setup Required</div>
+                      <p>Please complete the OAuth flow:</p>
+                      <a href="/auth?shop=${shop}" class="button">Authenticate App</a>
+                    </div>
+                  ` : `
+                    <div class="debug-section">
+                      <div class="section-title">🔍 Debug Tools</div>
+                      <ul>
+                        <li><a href="/api/test?shop=${shop}" target="_blank">Test Session</a></li>
+                        <li><a href="/api/shop?shop=${shop}" target="_blank">Shop Info</a></li>
+                        <li><a href="/api/order/1?shop=${shop}" target="_blank">Test Order API</a></li>
+                        <li><a href="/api/test-all?shop=${shop}" target="_blank">Comprehensive API Test</a></li>
+                      </ul>
+                    </div>
+                  `}
+                </div>
+              </div>
+              
+              <script>
+                // Initialize App Bridge
+                const AppBridge = window['app-bridge'];
+                const app = AppBridge.createApp({
+                  apiKey: '${SHOPIFY_API_KEY}',
+                  host: '${host || new URLSearchParams(window.location.search).get('host') || ''}'
+                });
+
+                // Set up navigation if needed
+                const History = AppBridge.actions.History;
+                const history = History.create(app);
+                
+                // Optional: Add loading bar
+                const Loading = AppBridge.actions.Loading;
+                const loading = Loading.create(app);
+                loading.dispatch(Loading.Action.STOP);
+              </script>
             </body>
             </html>
           `;
