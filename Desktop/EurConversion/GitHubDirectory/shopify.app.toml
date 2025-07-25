@@ -7,7 +7,8 @@ embedded = true
 
 [auth]
 redirect_urls = [
-  "https://shopify-currency-converter-production.up.railway.app/auth/callback"
+  "https://shopify-currency-converter-production.up.railway.app/auth/callback",
+  "https://shopify-currency-converter-production.up.railway.app/callback"
 ]
 
 [webhooks]
@@ -22,4 +23,11 @@ dev_store_url = "https://asapxt-teststore.myshopify.com"
 include_config_on_deploy = true
 
 [access_scopes]
-scopes = "read_orders,write_themes,read_locations"
+# Updated scopes to match what's in your index.js file
+scopes = "read_products,write_products,read_themes,write_themes"
+
+# App proxy for embedded functionality (optional but recommended)
+[app_proxy]
+url = "https://shopify-currency-converter-production.up.railway.app"
+subpath = "apps/currency-converter"
+prefix = "apps"

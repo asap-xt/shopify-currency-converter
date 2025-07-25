@@ -725,7 +725,7 @@ router.get('/api/products', async (ctx) => {
         const products = await response.json();
         console.log(`Found ${products.products?.length || 0} products`);
         
-        // Extract pricing info для currency conversion
+        // Extract pricing info за currency conversion
         const productPricing = products.products?.map(product => ({
             id: product.id,
             title: product.title,
@@ -944,9 +944,7 @@ router.get('/api/debug-token', async (ctx) => {
     }
 });
 
-// Заменете main route (около ред 990) с този код:
-
-// Middleware за всички останали заявки, за да се покаже главната страница
+// ⚡ CRITICAL CHANGE: Main route with automatic OAuth flow
 router.get('(/)', async (ctx) => {
     console.log('=== MAIN ROUTE ===');
     const shop = ctx.query.shop;
@@ -967,7 +965,23 @@ router.get('(/)', async (ctx) => {
         const session = await memorySessionStorage.loadSession(sessionId);
         console.log('Session check for:', sessionId, session ? 'FOUND' : 'NOT FOUND');
 
-        // За embedded apps винаги показваме interface
+        // ⚡ AUTOMATIC OAUTH: Ако няма сесия, автоматично redirect към OAuth
+        if (!session || !session.accessToken) {
+            console.log('No session found, redirecting to OAuth...');
+            
+            // Генерираме OAuth URL директно
+            const authUrl = `https://${shop}/admin/oauth/authorize?` + 
+                `client_id=${SHOPIFY_API_KEY}&` +
+                `scope=${SCOPES}&` +
+                `redirect_uri=${encodeURIComponent(HOST + '/auth/callback')}&` +
+                `state=${Math.random().toString(36).substring(7)}`;
+            
+            console.log('Redirecting to OAuth:', authUrl);
+            ctx.redirect(authUrl);
+            return;
+        }
+
+        // Ако имаме сесия, показваме embedded app interface
         ctx.set('Content-Type', 'text/html');
         ctx.set('Content-Security-Policy', `frame-ancestors https://${shop} https://admin.shopify.com`);
         
@@ -1056,9 +1070,9 @@ router.get('(/)', async (ctx) => {
                   </div>
                   
                   <div class="status">
-                    <span class="status-icon">${session && session.accessToken ? '✅' : '❌'}</span>
-                    <span class="${session && session.accessToken ? 'success' : 'error'}">
-                      Authentication: ${session && session.accessToken ? 'Active' : 'Not authenticated'}
+                    <span class="status-icon">✅</span>
+                    <span class="success">
+                      Authentication: Active
                     </span>
                   </div>
                   
@@ -1074,23 +1088,15 @@ router.get('(/)', async (ctx) => {
                     <li>Working on alternative solutions to display converted prices</li>
                   </ul>
                   
-                  ${!session || !session.accessToken ? `
-                    <div class="debug-section">
-                      <div class="section-title">🔧 Setup Required</div>
-                      <p>Please complete the OAuth flow:</p>
-                      <a href="/auth?shop=${shop}" class="button">Authenticate App</a>
-                    </div>
-                  ` : `
-                    <div class="debug-section">
-                      <div class="section-title">🔍 Debug Tools</div>
-                      <ul>
-                        <li><a href="/api/test?shop=${shop}" target="_blank">Test Session</a></li>
-                        <li><a href="/api/shop?shop=${shop}" target="_blank">Shop Info</a></li>
-                        <li><a href="/api/order/1?shop=${shop}" target="_blank">Test Order API</a></li>
-                        <li><a href="/api/test-all?shop=${shop}" target="_blank">Comprehensive API Test</a></li>
-                      </ul>
-                    </div>
-                  `}
+                  <div class="debug-section">
+                    <div class="section-title">🔍 Debug Tools</div>
+                    <ul>
+                      <li><a href="/api/test?shop=${shop}" target="_blank">Test Session</a></li>
+                      <li><a href="/api/shop?shop=${shop}" target="_blank">Shop Info</a></li>
+                      <li><a href="/api/order/1?shop=${shop}" target="_blank">Test Order API</a></li>
+                      <li><a href="/api/test-all?shop=${shop}" target="_blank">Comprehensive API Test</a></li>
+                    </ul>
+                  </div>
                 </div>
               </div>
               
