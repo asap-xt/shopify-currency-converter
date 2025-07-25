@@ -5,8 +5,8 @@ import Koa from 'koa';
 import koaSession from 'koa-session'; // преименувах го, за да не се бърка с обекта от Shopify
 import Router from 'koa-router';
 import getRawBody from 'raw-body';
-import crypto from 'crypto';
 import { shopifyApi, LATEST_API_VERSION, BillingInterval, Session } from '@shopify/shopify-api';
+import { randomBytes } from 'crypto';
 
 // --- DEBUG: Environment check ---
 console.log('=== Environment Variables Check ===');
@@ -149,12 +149,8 @@ router.get('/auth', async (ctx) => {
   
   try {
     console.log('Creating OAuth URL...');
-    // Добавяме state за сигурност
-    const state = crypto.randomBytes(16).toString('hex');
-    // Запазваме state в сесията
-    ctx.session = ctx.session || {};
-    ctx.session.state = state;
-    ctx.session.shop = shop;
+    // Генерираме state за сигурност
+    const state = randomBytes(16).toString('hex');
     
     const authUrl = `https://${shop}/admin/oauth/authorize?` + 
       `client_id=${SHOPIFY_API_KEY}&` +
