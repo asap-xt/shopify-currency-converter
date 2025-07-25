@@ -6,24 +6,26 @@
   "description": "Shopify app to show BGN↔EUR prices on Thank You & Order Status pages",
   "scripts": {
     "dev": "shopify app dev",
-    "build": "npx shopify app build",
-    "start": "node server/index.js"
+    "build": "echo 'Build not required for production'",
+    "start": "node server/index.js",
+    "shopify-build": "npx shopify app build"
   },
   "engines": {
     "node": ">=18.x"
   },
   "dependencies": {
+    "@koa/cors": "^5.0.0",
     "@shopify/app-bridge": "3.7.9",
     "@shopify/shopify-api": "^11.14.1",
     "@shopify/ui-extensions-react": "^2025.7.1",
-    "react-reconciler": "^0.29.0",
     "dotenv": "^10.0.0",
     "isomorphic-fetch": "^3.0.0",
     "koa": "^2.13.4",
     "koa-router": "^10.1.1",
     "koa-session": "^5.12.3",
     "raw-body": "^3.0.0",
-    "react": "^18.3.1"
+    "react": "^18.3.1",
+    "react-reconciler": "^0.29.0"
   },
   "devDependencies": {
     "@shopify/cli": "^3.83.0"
