@@ -966,7 +966,7 @@ router.get('(/)', async (ctx) => {
             <!DOCTYPE html>
             <html>
             <head>
-              <script src="https://unpkg.com/@shopify/app-bridge@3"></script>
+              <script src="https://unpkg.com/@shopify/app-bridge@2"></script>
               <script>
                 const urlParams = new URLSearchParams(window.location.search);
                 const host = urlParams.get('host');
