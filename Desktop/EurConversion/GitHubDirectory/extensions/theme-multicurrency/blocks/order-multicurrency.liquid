@@ -4,8 +4,8 @@
   След 01.01.2026: EUR основна, BGN втора
 {% endcomment %}
 
-{{ 'multicurrency.css' | asset_url | stylesheet_tag }}
-{{ 'multicurrency.js' | asset_url | script_tag }}
+<link rel="stylesheet" href="{{ 'multicurrency.css' | asset_url }}">
+<script src="{{ 'multicurrency.js' | asset_url }}" defer></script>
 
 {% comment %} Настройки {% endcomment %}
 {% assign fixed_rate = 1.95583 %}
@@ -147,3 +147,11 @@
     </div>
   </div>
 </div>
+
+{% schema %}
+{
+  "name": "MultiCurrency Totals",
+  "target": "section",
+  "settings": []
+}
+{% endschema %}

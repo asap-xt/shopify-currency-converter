@@ -134,6 +134,7 @@ router.get('/debug', async (ctx) => {
   };
 });
 
+
 // OAuth start
 router.get('/auth', async (ctx) => {
   console.log('=== AUTH START ===');
@@ -517,6 +518,150 @@ router.get('/api/test-all', async (ctx) => {
         ctx.status = 500;
         ctx.body = 'Comprehensive test failed: ' + error.message;
     }
+});
+
+// API endpoint за получаване на данни за конкретна поръчка (за Currency Converter)
+router.get('/api/order/:orderId', async (ctx) => {
+    console.log('=== ORDER DETAIL API ===');
+    const { orderId } = ctx.params;
+    
+    try {
+        const shop = ctx.query.shop;
+        if (!shop) {
+            ctx.status = 400;
+            ctx.body = { error: 'Missing shop parameter' };
+            return;
+        }
+        
+        console.log(`Fetching order ${orderId} for shop ${shop}`);
+        
+        const sessionId = `${shop}-offline`;
+        const session = await memorySessionStorage.loadSession(sessionId);
+        
+        if (!session || !session.accessToken) {
+            ctx.status = 401;
+            ctx.body = { error: 'Unauthorized - No valid session' };
+            return;
+        }
+        
+        // GraphQL query за конкретна поръчка
+        const query = `
+        query getOrder($id: ID!) {
+          order(id: $id) {
+            id
+            name
+            totalPriceSet {
+              shopMoney {
+                amount
+                currencyCode
+              }
+            }
+            subtotalPriceSet {
+              shopMoney {
+                amount
+              }
+            }
+            totalShippingPriceSet {
+              shopMoney {
+                amount
+              }
+            }
+            lineItems(first: 50) {
+              edges {
+                node {
+                  title
+                  quantity
+                  originalTotalSet {
+                    shopMoney {
+                      amount
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }`;
+        
+        console.log('Executing GraphQL query for order:', orderId);
+        const response = await fetch(`https://${shop}/admin/api/2024-01/graphql.json`, {
+            method: 'POST',
+            headers: { 
+                'X-Shopify-Access-Token': session.accessToken,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ 
+                query,
+                variables: { 
+                    id: `gid://shopify/Order/${orderId}` 
+                }
+            })
+        });
+        
+        if (!response.ok) {
+            throw new Error(`Shopify GraphQL API error: ${response.status} ${response.statusText}`);
+        }
+        
+        const result = await response.json();
+        
+        if (result.errors) {
+            console.error('GraphQL errors:', result.errors);
+            ctx.status = 400;
+            ctx.body = { 
+                error: 'GraphQL query failed', 
+                details: result.errors 
+            };
+            return;
+        }
+        
+        const order = result.data?.order;
+        
+        if (!order) {
+            console.log('Order not found:', orderId);
+            ctx.status = 404;
+            ctx.body = { error: 'Order not found' };
+            return;
+        }
+        
+        console.log('Order retrieved successfully:', order.name);
+        
+        // Форматираме данните за frontend
+        const formattedOrder = {
+            id: orderId,
+            name: order.name,
+            totalPrice: order.totalPriceSet.shopMoney.amount,
+            subtotalPrice: order.subtotalPriceSet.shopMoney.amount,
+            shippingPrice: order.totalShippingPriceSet.shopMoney.amount,
+            currency: order.totalPriceSet.shopMoney.currencyCode,
+            lineItems: order.lineItems.edges.map(edge => ({
+                title: edge.node.title,
+                quantity: edge.node.quantity,
+                price: edge.node.originalTotalSet.shopMoney.amount
+            }))
+        };
+        
+        // Enable CORS for extension requests
+        ctx.set('Access-Control-Allow-Origin', '*');
+        ctx.set('Access-Control-Allow-Methods', 'GET, OPTIONS');
+        ctx.set('Access-Control-Allow-Headers', 'Content-Type');
+        
+        ctx.body = formattedOrder;
+        
+    } catch (error) {
+        console.error('Error fetching order:', error);
+        ctx.status = 500;
+        ctx.body = { 
+            error: 'Failed to fetch order data',
+            details: error.message 
+        };
+    }
+});
+
+// CORS preflight handler за OPTIONS requests
+router.options('/api/order/:orderId', async (ctx) => {
+    ctx.set('Access-Control-Allow-Origin', '*');
+    ctx.set('Access-Control-Allow-Methods', 'GET, OPTIONS');
+    ctx.set('Access-Control-Allow-Headers', 'Content-Type');
+    ctx.status = 204;
 });
 
 // Helper function to get main theme ID

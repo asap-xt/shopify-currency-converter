@@ -1,33 +1,44 @@
 # shopify.app.toml
 
-# 1. Основни мета данни
-name             = "shopify-multicurrency-app"
-client_id        = "d2b46433a7a46a72f4a6b7930ac0a71f"  
-application_url  = "https://shopify-currency-converter.railway.com"
-embedded         = true
+name = "eurozone-dual-currency-display"
+client_id = "94be870f0498bac664dfccb02475dfa4"
+application_url = "https://shopify-currency-converter-production.up.railway.app"
+embedded = true
 
-# 2. Къде са extension-ите
-extension_directories = ["extensions/"]
-
-# 3. OAuth скопове
-[access_scopes]
-scopes = "read_orders,write_themes"
-
-# 4. OAuth redirect URL — ЗАДЪЛЖИТЕЛНО точният ти публичен domain
 [auth]
 redirect_urls = [
-  "https://shopify-currency-converter.railway.com/auth/callback"
+  "https://shopify-currency-converter-production.up.railway.app/auth/callback"
 ]
 
-# 5. Webhooks — CLI изисква този секшън
 [webhooks]
-api_version = "2025-01"
+api_version = "2024-01"
 
-[[webhooks.subscriptions]]
-topics            = ["app/uninstalled"]
-compliance_topics = ["customers/redact","customers/data_request","shop/redact"]
-uri               = "/webhooks"
+[pos]
+embedded = false
 
-# 6. Build настройки
 [build]
+automatically_update_urls_on_dev = true
+dev_store_url = "https://asapxt-teststore.myshopify.com"
 include_config_on_deploy = true
+
+[access_scopes]
+# Увери се, че read_orders е тук, за да може бекендът да чете поръчките
+scopes = "read_orders,write_themes"
+
+# В тази секция е важната промяна
+[[build.extensions]]
+type = "ui_extension"
+name = "EuroZone Currency Display"
+handle = "eurozone-currency-display"
+
+[build.extensions.targeting]
+# Тук са дефинирани страниците, на които ще се показва разширението
+targets = [
+  "purchase.checkout.block.render",
+  "purchase.thank-you.block.render",
+  "customer-account.order-status.block.render" # Добавяме и таргет за клиентския акаунт
+]
+
+# Тази секция дава право на разширението да прави мрежови заявки
+[build.extensions.capabilities]
+network_access = true
