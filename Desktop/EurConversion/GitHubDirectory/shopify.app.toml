@@ -22,23 +22,4 @@ dev_store_url = "https://asapxt-teststore.myshopify.com"
 include_config_on_deploy = true
 
 [access_scopes]
-# Увери се, че read_orders е тук, за да може бекендът да чете поръчките
 scopes = "read_orders,write_themes"
-
-# В тази секция е важната промяна
-[[build.extensions]]
-type = "ui_extension"
-name = "EuroZone Currency Display"
-handle = "eurozone-currency-display"
-
-[build.extensions.targeting]
-# Тук са дефинирани страниците, на които ще се показва разширението
-targets = [
-  "purchase.checkout.block.render",
-  "purchase.thank-you.block.render",
-  "customer-account.order-status.block.render" # Добавяме и таргет за клиентския акаунт
-]
-
-# Тази секция дава право на разширението да прави мрежови заявки
-[build.extensions.capabilities]
-network_access = true

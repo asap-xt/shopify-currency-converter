@@ -13,6 +13,7 @@ targeting = [
 [capabilities]
 api_access = true
 block_progress = false
+network_access = true # <-- ТУК Е КЛЮЧОВАТА ПРОМЯНА
 
 [settings]
 [[settings.fields]]
