@@ -9,7 +9,9 @@ import {
   useCartLines,
   useApi,
   useSubscription,
-  Divider
+  Divider,
+  useShippingAddress,
+  useCurrency
 } from '@shopify/ui-extensions-react/checkout';
 
 const EUR_TO_BGN_RATE = 1.95583;
@@ -25,6 +27,12 @@ export default reactExtension(
 );
 
 function Extension() {
+  // Вземаме валутата на поръчката
+  const currency = useCurrency();
+  
+  // Вземаме адреса на доставка
+  const shippingAddress = useShippingAddress();
+  
   // Общата сума
   const total = useTotalAmount();
   
@@ -49,9 +57,20 @@ function Extension() {
     console.log('Error:', error);
   }
   
+  // ПРОВЕРКА 1: Валутата трябва да е BGN
+  if (currency !== 'BGN') {
+    return null; // Не показваме нищо
+  }
+  
+  // ПРОВЕРКА 2: Адресът трябва да е в България
+  if (shippingAddress && shippingAddress.countryCode !== 'BG') {
+    return null; // Не показваме нищо
+  }
+  
   const totalBGN = total?.amount || 0;
   const totalEUR = convertToEUR(totalBGN);
 
+  // Нормалният UI за BGN поръчки в България
   return (
     <View padding="base" border="base" background="subdued">
       <BlockStack spacing="base">
