@@ -13,6 +13,7 @@
     "node": ">=18.x"
   },
   "dependencies": {
+    "@koa/cors": "^5.0.0",
     "@shopify/app-bridge": "3.7.9",
     "@shopify/shopify-api": "^11.14.1",
     "@shopify/ui-extensions": "^2025.7.1",

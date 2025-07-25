@@ -88,8 +88,16 @@ try {
   process.exit(1);
 }
 
+const Koa = require('koa');
+const cors = require('@koa/cors'); // Добави този ред, ако още го няма
+
 const app = new Koa();
 app.keys = [SHOPIFY_API_SECRET];
+
+// Добави това веднага след създаването на app:
+app.use(cors({
+  origin: 'https://extensions.shopifycdn.com'
+}));
 
 // Global error handler
 app.on('error', (err, ctx) => {
