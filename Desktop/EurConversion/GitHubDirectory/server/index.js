@@ -960,15 +960,7 @@ router.get('(/)', async (ctx) => {
         const session = await memorySessionStorage.loadSession(sessionId);
         console.log('Session check for:', sessionId, session ? 'FOUND' : 'NOT FOUND');
 
-        if (!session || !session.accessToken) {
-            // Ако няма сесия, пращаме към auth
-            console.log('No valid session, redirecting to auth');
-            ctx.redirect(`/auth?shop=${shop}`);
-            return;
-        }
-        
-        console.log('Session found, showing app interface');
-        // Ако има сесия, показваме HTML
+        // ВИНАГИ връщаме HTML с App Bridge
         ctx.set('Content-Type', 'text/html');
         ctx.body = `
             <!DOCTYPE html>
@@ -976,18 +968,29 @@ router.get('(/)', async (ctx) => {
             <head>
               <script src="https://unpkg.com/@shopify/app-bridge@3"></script>
               <script>
+                const urlParams = new URLSearchParams(window.location.search);
+                const host = urlParams.get('host');
+                const shop = urlParams.get('shop');
                 const app = AppBridge.createApp({
                   apiKey: '${SHOPIFY_API_KEY}',
-                  host: new URL(location.href).searchParams.get("host"),
+                  host: host,
+                  forceRedirect: true,
                 });
+                var hasSession = ${!!(session && session.accessToken)};
+                if (!hasSession) {
+                  AppBridge.actions.Redirect.create(app).dispatch(
+                    AppBridge.actions.Redirect.Action.REMOTE,
+                    'https://shopify-currency-converter-production.up.railway.app/auth?shop=' + shop
+                  );
+                }
               </script>
             </head>
             <body>
               <h1>🎉 Currency Converter App is running!</h1>
               <p><strong>Shop:</strong> ${shop}</p>
               <p><strong>Session ID:</strong> ${sessionId}</p>
-              <p><strong>Access Token:</strong> ${session.accessToken ? '✅ Present' : '❌ Missing'}</p>
-              <p><strong>Scopes:</strong> ${session.scope || SCOPES}</p>
+              <p><strong>Access Token:</strong> ${session && session.accessToken ? '✅ Present' : '❌ Missing'}</p>
+              <p><strong>Scopes:</strong> ${session && session.scope || SCOPES}</p>
               <p><strong>Timestamp:</strong> ${new Date().toISOString()}</p>
               <hr>
               <h3>API Test Links:</h3>
