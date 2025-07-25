@@ -6,14 +6,12 @@ name = "EuroZone Currency Display"
 handle = "eurozone-currency-display"
 
 targeting = [
-  { target = "purchase.thank-you.block.render", module = "./src/Checkout.jsx" },
-  { target = "customer-account.order-status.block.render", module = "./src/OrderStatus.jsx" }
+  { target = "purchase.thank-you.block.render", module = "./src/Checkout.jsx" }
 ]
 
 [capabilities]
 api_access = true
 block_progress = false
-network_access = true # <-- ТУК Е КЛЮЧОВАТА ПРОМЯНА
 
 [settings]
 [[settings.fields]]

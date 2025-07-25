@@ -1,5 +1,4 @@
 # shopify.app.toml
-
 name = "eurozone-dual-currency-display"
 client_id = "94be870f0498bac664dfccb02475dfa4"
 application_url = "https://shopify-currency-converter-production.up.railway.app"
@@ -7,8 +6,7 @@ embedded = true
 
 [auth]
 redirect_urls = [
-  "https://shopify-currency-converter-production.up.railway.app/auth/callback",
-  "https://shopify-currency-converter-production.up.railway.app/callback"
+  "https://shopify-currency-converter-production.up.railway.app/auth/callback"
 ]
 
 [webhooks]
@@ -19,15 +17,20 @@ embedded = false
 
 [build]
 automatically_update_urls_on_dev = true
+# ВЪРНАТО КЪМ ОРИГИНАЛНИЯ ТЕСТ МАГАЗИН:
 dev_store_url = "https://asapxt-teststore.myshopify.com"
 include_config_on_deploy = true
 
 [access_scopes]
-# Updated scopes to match what's in your index.js file
-scopes = "read_products,write_products,read_themes,write_themes"
+scopes = "read_orders,write_themes"
 
-# App proxy for embedded functionality (optional but recommended)
-[app_proxy]
-url = "https://shopify-currency-converter-production.up.railway.app"
-subpath = "apps/currency-converter"
-prefix = "apps"
+[[build.extensions]]
+type = "ui_extension"
+name = "EuroZone Currency Display"
+handle = "eurozone-currency-display"
+
+[build.extensions.targeting]
+targets = [
+  "purchase.checkout.block.render",
+  "purchase.thank-you.block.render"
+]

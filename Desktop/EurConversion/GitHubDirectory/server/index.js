@@ -2,8 +2,7 @@
 import 'dotenv/config';
 import '@shopify/shopify-api/adapters/node';
 import Koa from 'koa';
-import cors from '@koa/cors';
-import koaSession from 'koa-session';
+import koaSession from 'koa-session'; // преименувах го, за да не се бърка с обекта от Shopify
 import Router from 'koa-router';
 import getRawBody from 'raw-body';
 import { shopifyApi, LATEST_API_VERSION, BillingInterval, Session } from '@shopify/shopify-api';
@@ -92,12 +91,6 @@ try {
 const app = new Koa();
 app.keys = [SHOPIFY_API_SECRET];
 
-// Add CORS for Shopify extensions
-app.use(cors({
-  origin: '*',
-  credentials: true
-}));
-
 // Global error handler
 app.on('error', (err, ctx) => {
   console.error('App error:', err);
@@ -118,21 +111,6 @@ app.use(async (ctx, next) => {
 app.use(koaSession({ sameSite: 'none', secure: true }, app));
 
 const router = new Router();
-
-// Test route за проверка
-router.get('/test-html', async (ctx) => {
-    ctx.body = `
-        <!DOCTYPE html>
-        <html>
-        <head><title>Test</title></head>
-        <body>
-            <h1>Test Page Works!</h1>
-            <p>Shop: ${ctx.query.shop || 'no shop'}</p>
-            <p>Time: ${new Date().toISOString()}</p>
-        </body>
-        </html>
-    `;
-});
 
 // Health check route (за Railway)
 router.get('/health', async (ctx) => {
@@ -237,9 +215,9 @@ router.get('/auth/callback', async (ctx) => {
         await memorySessionStorage.storeSession(session);
         console.log('Session stored successfully');
         
-        // За embedded apps, redirect към admin
-        const redirectUrl = `https://${shop}/admin/apps/${SHOPIFY_API_KEY}`;
-        console.log('Redirecting to admin:', redirectUrl);
+        // Пренасочване към приложението
+        const redirectUrl = `/?shop=${shop}&host=${ctx.query.host}`;
+        console.log('Redirecting to:', redirectUrl);
         ctx.redirect(redirectUrl);
         
     } catch (error) {
@@ -541,150 +519,6 @@ router.get('/api/test-all', async (ctx) => {
     }
 });
 
-// API endpoint за получаване на данни за конкретна поръчка (за Currency Converter)
-router.get('/api/order/:orderId', async (ctx) => {
-    console.log('=== ORDER DETAIL API ===');
-    const { orderId } = ctx.params;
-    
-    try {
-        const shop = ctx.query.shop;
-        if (!shop) {
-            ctx.status = 400;
-            ctx.body = { error: 'Missing shop parameter' };
-            return;
-        }
-        
-        console.log(`Fetching order ${orderId} for shop ${shop}`);
-        
-        const sessionId = `${shop}-offline`;
-        const session = await memorySessionStorage.loadSession(sessionId);
-        
-        if (!session || !session.accessToken) {
-            ctx.status = 401;
-            ctx.body = { error: 'Unauthorized - No valid session' };
-            return;
-        }
-        
-        // GraphQL query за конкретна поръчка
-        const query = `
-        query getOrder($id: ID!) {
-          order(id: $id) {
-            id
-            name
-            totalPriceSet {
-              shopMoney {
-                amount
-                currencyCode
-              }
-            }
-            subtotalPriceSet {
-              shopMoney {
-                amount
-              }
-            }
-            totalShippingPriceSet {
-              shopMoney {
-                amount
-              }
-            }
-            lineItems(first: 50) {
-              edges {
-                node {
-                  title
-                  quantity
-                  originalTotalSet {
-                    shopMoney {
-                      amount
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }`;
-        
-        console.log('Executing GraphQL query for order:', orderId);
-        const response = await fetch(`https://${shop}/admin/api/2024-01/graphql.json`, {
-            method: 'POST',
-            headers: { 
-                'X-Shopify-Access-Token': session.accessToken,
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({ 
-                query,
-                variables: { 
-                    id: `gid://shopify/Order/${orderId}` 
-                }
-            })
-        });
-        
-        if (!response.ok) {
-            throw new Error(`Shopify GraphQL API error: ${response.status} ${response.statusText}`);
-        }
-        
-        const result = await response.json();
-        
-        if (result.errors) {
-            console.error('GraphQL errors:', result.errors);
-            ctx.status = 400;
-            ctx.body = { 
-                error: 'GraphQL query failed', 
-                details: result.errors 
-            };
-            return;
-        }
-        
-        const order = result.data?.order;
-        
-        if (!order) {
-            console.log('Order not found:', orderId);
-            ctx.status = 404;
-            ctx.body = { error: 'Order not found' };
-            return;
-        }
-        
-        console.log('Order retrieved successfully:', order.name);
-        
-        // Форматираме данните за frontend
-        const formattedOrder = {
-            id: orderId,
-            name: order.name,
-            totalPrice: order.totalPriceSet.shopMoney.amount,
-            subtotalPrice: order.subtotalPriceSet.shopMoney.amount,
-            shippingPrice: order.totalShippingPriceSet.shopMoney.amount,
-            currency: order.totalPriceSet.shopMoney.currencyCode,
-            lineItems: order.lineItems.edges.map(edge => ({
-                title: edge.node.title,
-                quantity: edge.node.quantity,
-                price: edge.node.originalTotalSet.shopMoney.amount
-            }))
-        };
-        
-        // Enable CORS for extension requests
-        ctx.set('Access-Control-Allow-Origin', '*');
-        ctx.set('Access-Control-Allow-Methods', 'GET, OPTIONS');
-        ctx.set('Access-Control-Allow-Headers', 'Content-Type');
-        
-        ctx.body = formattedOrder;
-        
-    } catch (error) {
-        console.error('Error fetching order:', error);
-        ctx.status = 500;
-        ctx.body = { 
-            error: 'Failed to fetch order data',
-            details: error.message 
-        };
-    }
-});
-
-// CORS preflight handler за OPTIONS requests
-router.options('/api/order/:orderId', async (ctx) => {
-    ctx.set('Access-Control-Allow-Origin', '*');
-    ctx.set('Access-Control-Allow-Methods', 'GET, OPTIONS');
-    ctx.set('Access-Control-Allow-Headers', 'Content-Type');
-    ctx.status = 204;
-});
-
 // Helper function to get main theme ID
 async function getMainThemeId(shop, accessToken) {
     try {
@@ -705,7 +539,6 @@ async function getMainThemeId(shop, accessToken) {
         return 'undefined';
     }
 }
-
 router.get('/api/products', async (ctx) => {
     console.log('=== PRODUCTS API TEST ===');
     try {
@@ -740,7 +573,7 @@ router.get('/api/products', async (ctx) => {
         const products = await response.json();
         console.log(`Found ${products.products?.length || 0} products`);
         
-        // Extract pricing info за currency conversion
+        // Extract pricing info для currency conversion
         const productPricing = products.products?.map(product => ({
             id: product.id,
             title: product.title,
@@ -768,7 +601,6 @@ router.get('/api/products', async (ctx) => {
         ctx.body = 'Failed to fetch products: ' + error.message;
     }
 });
-
 router.get('/api/orders-graphql', async (ctx) => {
     console.log('=== GRAPHQL ORDERS TEST ===');
     try {
@@ -864,7 +696,6 @@ router.get('/api/orders-graphql', async (ctx) => {
         ctx.body = 'Failed to fetch orders via GraphQL: ' + error.message;
     }
 });
-
 router.get('/api/debug-token', async (ctx) => {
     console.log('=== TOKEN DEBUG ===');
     try {
@@ -959,15 +790,11 @@ router.get('/api/debug-token', async (ctx) => {
     }
 });
 
-// ⚡ CRITICAL CHANGE: Main route with automatic OAuth flow
+// Middleware за всички останали заявки, за да се покаже главната страница
 router.get('(/)', async (ctx) => {
     console.log('=== MAIN ROUTE ===');
-    console.log('Full URL:', ctx.url);
-    console.log('All query params:', ctx.query);
     const shop = ctx.query.shop;
-    const host = ctx.query.host;
     console.log('Shop parameter:', shop);
-    console.log('Host parameter:', host);
 
     try {
         if (!shop) {
@@ -982,126 +809,56 @@ router.get('(/)', async (ctx) => {
         const session = await memorySessionStorage.loadSession(sessionId);
         console.log('Session check for:', sessionId, session ? 'FOUND' : 'NOT FOUND');
 
-        // ⚡ AUTOMATIC OAUTH: Ако няма сесия, автоматично redirect към OAuth
         if (!session || !session.accessToken) {
-            console.log('No session found, redirecting to OAuth...');
-            
-            // Генерираме OAuth URL директно
-            const authUrl = `https://${shop}/admin/oauth/authorize?` + 
-                `client_id=${SHOPIFY_API_KEY}&` +
-                `scope=${SCOPES}&` +
-                `redirect_uri=${encodeURIComponent(HOST + '/auth/callback')}&` +
-                `state=${Math.random().toString(36).substring(7)}`;
-            
-            console.log('Redirecting to OAuth:', authUrl);
-            ctx.redirect(authUrl);
+            // Ако няма сесия, пращаме към auth
+            console.log('No valid session, redirecting to auth');
+            ctx.redirect(`/auth?shop=${shop}`);
             return;
         }
-
-        // Ако имаме сесия, показваме embedded app interface
+        
+        console.log('Session found, showing app interface');
+        // Ако има сесия, показваме HTML
         ctx.set('Content-Type', 'text/html');
-        ctx.set('Content-Security-Policy', `frame-ancestors https://${shop} https://admin.shopify.com`);
-        
-        // Опростен HTML за debug
-        const html = `<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>EuroZone Currency Converter</title>
-    <style>
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            padding: 20px;
-            margin: 0;
-            background: #f4f6f8;
-        }
-        .debug {
-            background: #ffebee;
-            border: 1px solid #ef5350;
-            padding: 10px;
-            margin: 10px 0;
-            border-radius: 4px;
-            font-family: monospace;
-            font-size: 12px;
-        }
-        .container {
-            max-width: 800px;
-            margin: 0 auto;
-        }
-        .card {
-            background: white;
-            border-radius: 8px;
-            padding: 24px;
-            margin-bottom: 20px;
-            box-shadow: 0 0 0 1px rgba(63,63,68,.05), 0 1px 3px 0 rgba(63,63,68,.15);
-        }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <div class="debug">
-            DEBUG INFO:<br>
-            Shop: ${shop}<br>
-            Host: ${host || 'NOT PROVIDED'}<br>
-            API Key: ${SHOPIFY_API_KEY}<br>
-            Time: ${new Date().toISOString()}<br>
-            Session exists: ${session ? 'YES' : 'NO'}
-        </div>
-        
-        <div class="card">
-            <h1>🎉 EuroZone Currency Converter</h1>
-            <p>If you see this, the page is loading correctly!</p>
-            
-            <div style="margin: 20px 0;">
-                <strong>Shop:</strong> ${shop}<br>
-                <strong>Status:</strong> <span style="color: #008060;">✅ Authentication Active</span>
-            </div>
-            
-            <h3>📦 Extension Status</h3>
-            <ul>
-                <li>✅ Thank You page - Currency converter is active and working</li>
-                <li>⚠️ Order Status page - Extension installed but data fetch issues</li>
-            </ul>
-            
-            <h3>🔍 Debug Tools</h3>
-            <ul>
-                <li><a href="/api/test?shop=${shop}" target="_blank">Test Session</a></li>
-                <li><a href="/api/shop?shop=${shop}" target="_blank">Shop Info</a></li>
-            </ul>
-        </div>
-    </div>
-    
-    <script>
-        console.log('Page loaded successfully');
-        console.log('Shop:', '${shop}');
-        console.log('Host:', '${host || 'NOT PROVIDED'}');
-        
-        // Опит за App Bridge без да спираме страницата при грешка
-        try {
-            if (window['app-bridge']) {
-                console.log('App Bridge found, initializing...');
-                const AppBridge = window['app-bridge'];
+        ctx.body = `
+            <!DOCTYPE html>
+            <html>
+            <head>
+              <script src="https://unpkg.com/@shopify/app-bridge@3"></script>
+              <script>
                 const app = AppBridge.createApp({
-                    apiKey: '${SHOPIFY_API_KEY}',
-                    host: '${host || ''}'
+                  apiKey: '${SHOPIFY_API_KEY}',
+                  host: new URL(location.href).searchParams.get("host"),
                 });
-                console.log('App Bridge initialized');
-            } else {
-                console.error('App Bridge not found');
-            }
-        } catch (error) {
-            console.error('App Bridge error:', error);
-        }
-    </script>
-    
-    <!-- Load App Bridge from CDN -->
-    <script src="https://unpkg.com/@shopify/app-bridge@3"></script>
-</body>
-</html>`;
-        
-        ctx.body = html;
-        console.log('HTML response sent, length:', html.length);
+              </script>
+            </head>
+            <body>
+              <h1>🎉 Currency Converter App is running!</h1>
+              <p><strong>Shop:</strong> ${shop}</p>
+              <p><strong>Session ID:</strong> ${sessionId}</p>
+              <p><strong>Access Token:</strong> ${session.accessToken ? '✅ Present' : '❌ Missing'}</p>
+              <p><strong>Scopes:</strong> ${session.scope || SCOPES}</p>
+              <p><strong>Timestamp:</strong> ${new Date().toISOString()}</p>
+              <hr>
+              <h3>API Test Links:</h3>
+              <ul>
+                <li><a href="/api/test?shop=${shop}" target="_blank">Test API Session</a></li>
+                <li><a href="/api/test-all?shop=${shop}" target="_blank">🔍 Test ALL APIs (Comprehensive)</a></li>
+                <li><hr></li>
+                <li><strong>Known Working APIs:</strong></li>
+                <li><a href="/api/themes?shop=${shop}" target="_blank">🎨 Themes API ✅</a></li>
+                <li><a href="/api/shop?shop=${shop}" target="_blank">🏪 Shop Info API ✅</a></li>
+                <li><hr></li>
+                <li><strong>Blocked APIs (Protected Customer Data):</strong></li>
+                <li><a href="/api/orders?shop=${shop}" target="_blank">🛍️ Orders API ❌</a></li>
+                <li><a href="/api/products?shop=${shop}" target="_blank">📦 Products API ❌</a></li>
+                <li><hr></li>
+                <li><a href="/api/debug-token?shop=${shop}" target="_blank">🔍 Debug Token Permissions</a></li>
+                <li><a href="/debug" target="_blank">Debug Info</a></li>
+                <li><a href="/health" target="_blank">Health Check</a></li>
+              </ul>
+            </body>
+            </html>
+          `;
     } catch (error) {
         console.error('Error in main route:', error);
         ctx.status = 500;
