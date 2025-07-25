@@ -8,7 +8,8 @@ import {
   useTotalAmount,
   useCartLines,
   useApi,
-  useSubscription
+  useSubscription,
+  Divider
 } from '@shopify/ui-extensions-react/checkout';
 
 const EUR_TO_BGN_RATE = 1.95583;
@@ -18,16 +19,12 @@ const convertToEUR = (bgnAmount) => {
   return (parseFloat(bgnAmount) / EUR_TO_BGN_RATE).toFixed(2);
 };
 
-console.log('🚀 EXTENSION FILE LOADED!');
-
 export default reactExtension(
   'purchase.thank-you.block.render',
   () => <Extension />,
 );
 
 function Extension() {
-  console.log('🎯 EXTENSION RENDERING!');
-  
   // Общата сума
   const total = useTotalAmount();
   
@@ -48,13 +45,6 @@ function Extension() {
         shipping = useSubscription(api.cost.totalShippingAmount);
       }
     }
-    
-    console.log('Data:', { 
-      total, 
-      subtotal, 
-      shipping, 
-      linesCount: lines?.length || 0 
-    });
   } catch (error) {
     console.log('Error:', error);
   }
@@ -64,28 +54,22 @@ function Extension() {
 
   return (
     <View padding="base" border="base" background="subdued">
-      <BlockStack spacing="tight">
+      <BlockStack spacing="base">
+        {/* Заглавие с флагове */}
         <Text size="medium" emphasis="bold">
-          🇪🇺 EuroZone Currency Display
+          🇧🇬 Твоята поръчка 🇪🇺
         </Text>
         
-        {/* Главната сума в BGN / EUR */}
-        <InlineLayout spacing="base" blockAlignment="center">
-          <Text size="large" emphasis="bold">
-            {totalBGN.toFixed(2)} ЛВ / {totalEUR} EUR
-          </Text>
-        </InlineLayout>
-        
-        {/* Breakdown секция */}
-        <View padding="tight" background="base" cornerRadius="base">
-          <BlockStack spacing="tight">
-            <Text size="small" emphasis="bold" appearance="subdued">
-              Разбивка:
+        {/* Разбивка секция */}
+        <View padding="base" background="base" cornerRadius="base">
+          <BlockStack spacing="base">
+            <Text size="small" emphasis="bold">
+              Продукти:
             </Text>
             
             {/* Продукти по отделно */}
             {lines && lines.length > 0 && (
-              <BlockStack spacing="extraTight">
+              <BlockStack spacing="tight">
                 {lines.map((line, index) => {
                   const title =
                     line.merchandise.product?.title ?? 
@@ -99,12 +83,16 @@ function Extension() {
                       spacing="base"
                       blockAlignment="center"
                     >
-                      <Text size="small">
-                        {line.quantity}× {title}
-                      </Text>
-                      <Text size="small" emphasis="bold">
-                        {lineBGN.toFixed(2)} ЛВ / {lineEUR} EUR
-                      </Text>
+                      <View inlineAlignment="start" minInlineSize="fill">
+                        <Text size="small">
+                          {line.quantity}× {title}
+                        </Text>
+                      </View>
+                      <View inlineAlignment="end">
+                        <Text size="small" emphasis="bold">
+                          {lineBGN.toFixed(2)} ЛВ / {lineEUR} EUR
+                        </Text>
+                      </View>
                     </InlineLayout>
                   );
                 })}
@@ -113,23 +101,43 @@ function Extension() {
 
             {/* Доставка в BGN / EUR */}
             {shipping && shipping.amount > 0 && (
-              <InlineLayout spacing="base" blockAlignment="center">
-                <Text size="small">Доставка</Text>
-                <Text size="small" emphasis="bold">
-                  {shipping.amount.toFixed(2)} ЛВ / {convertToEUR(shipping.amount)} EUR
-                </Text>
-              </InlineLayout>
+              <>
+                <Divider />
+                <InlineLayout spacing="base" blockAlignment="center">
+                  <View inlineAlignment="start" minInlineSize="fill">
+                    <Text size="small">Доставка</Text>
+                  </View>
+                  <View inlineAlignment="end">
+                    <Text size="small" emphasis="bold">
+                      {shipping.amount.toFixed(2)} ЛВ / {convertToEUR(shipping.amount)} EUR
+                    </Text>
+                  </View>
+                </InlineLayout>
+              </>
             )}
           </BlockStack>
         </View>
         
-        <Text size="small" appearance="subdued">
-          Курс: 1 EUR = {EUR_TO_BGN_RATE} BGN
-        </Text>
+        {/* Обща сума */}
+        <View padding="tight" background="interactive" cornerRadius="base">
+          <InlineLayout spacing="base" blockAlignment="center">
+            <View inlineAlignment="start" minInlineSize="fill">
+              <Text size="medium" emphasis="bold">Общо:</Text>
+            </View>
+            <View inlineAlignment="end">
+              <Text size="large" emphasis="bold">
+                {totalBGN.toFixed(2)} ЛВ / {totalEUR} EUR
+              </Text>
+            </View>
+          </InlineLayout>
+        </View>
         
-        <Text size="extraSmall" appearance="accent">
-          {total?.amount ? '✅ Реална цена от поръчката' : '📝 Примерна цена'}
-        </Text>
+        {/* Курс */}
+        <View padding="extraTight">
+          <Text size="small" appearance="subdued">
+            Курс: 1 EUR = {EUR_TO_BGN_RATE} BGN
+          </Text>
+        </View>
       </BlockStack>
     </View>
   );

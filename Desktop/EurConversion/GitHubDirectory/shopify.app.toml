@@ -32,5 +32,4 @@ handle = "eurozone-currency-display"
 [build.extensions.targeting]
 targets = [
   "purchase.checkout.block.render",
-  "purchase.thank-you.block.render"
 ]
