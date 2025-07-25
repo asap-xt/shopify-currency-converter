@@ -5,6 +5,7 @@ import Koa from 'koa';
 import koaSession from 'koa-session'; // преименувах го, за да не се бърка с обекта от Shopify
 import Router from 'koa-router';
 import getRawBody from 'raw-body';
+import crypto from 'crypto';
 import { shopifyApi, LATEST_API_VERSION, BillingInterval, Session } from '@shopify/shopify-api';
 
 // --- DEBUG: Environment check ---
@@ -134,7 +135,7 @@ router.get('/debug', async (ctx) => {
   };
 });
 
-// OAuth start
+// OAuth start - правилен начин за embedded apps
 router.get('/auth', async (ctx) => {
   console.log('=== AUTH START ===');
   const shop = ctx.query.shop;
@@ -148,14 +149,20 @@ router.get('/auth', async (ctx) => {
   
   try {
     console.log('Creating OAuth URL...');
-    // За версия 11.x използваме директно OAuth URL
+    // Добавяме state за сигурност
+    const state = crypto.randomBytes(16).toString('hex');
+    // Запазваме state в сесията
+    ctx.session = ctx.session || {};
+    ctx.session.state = state;
+    ctx.session.shop = shop;
+    
     const authUrl = `https://${shop}/admin/oauth/authorize?` + 
       `client_id=${SHOPIFY_API_KEY}&` +
       `scope=${SCOPES}&` +
       `redirect_uri=${encodeURIComponent(HOST + '/auth/callback')}&` +
-      `state=${Math.random().toString(36).substring(7)}`;
+      `state=${state}`;
     
-    console.log('OAuth URL generated:', authUrl);
+    console.log('OAuth URL generated');
     ctx.redirect(authUrl);
   } catch (error) {
     console.error('Error creating OAuth URL:', error);
@@ -826,31 +833,10 @@ router.get('(/)', async (ctx) => {
         console.log('Session check for:', sessionId, session ? 'FOUND' : 'NOT FOUND');
 
         if (!session || !session.accessToken) {
-            // Ако няма сесия, проверяваме дали сме в iframe
-            console.log('No valid session, need to authenticate');
-            
-            // Добавяме script за проверка на iframe и redirect
-            ctx.set('Content-Type', 'text/html');
-            ctx.body = `
-                <!DOCTYPE html>
-                <html>
-                <head>
-                    <script>
-                        // Проверяваме дали сме в iframe
-                        if (window.top !== window.self) {
-                            // Ако сме в iframe, отваряме auth в top window
-                            window.top.location.href = '/auth?shop=${shop}';
-                        } else {
-                            // Ако не сме в iframe, правим нормален redirect
-                            window.location.href = '/auth?shop=${shop}';
-                        }
-                    </script>
-                </head>
-                <body>
-                    <p>Redirecting to authentication...</p>
-                </body>
-                </html>
-            `;
+            // За embedded apps - просто redirect към auth
+            console.log('No valid session, redirecting to auth');
+            const authUrl = `/auth?shop=${shop}`;
+            ctx.redirect(authUrl);
             return;
         }
         
