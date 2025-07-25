@@ -119,6 +119,21 @@ app.use(koaSession({ sameSite: 'none', secure: true }, app));
 
 const router = new Router();
 
+// Test route за проверка
+router.get('/test-html', async (ctx) => {
+    ctx.body = `
+        <!DOCTYPE html>
+        <html>
+        <head><title>Test</title></head>
+        <body>
+            <h1>Test Page Works!</h1>
+            <p>Shop: ${ctx.query.shop || 'no shop'}</p>
+            <p>Time: ${new Date().toISOString()}</p>
+        </body>
+        </html>
+    `;
+});
+
 // Health check route (за Railway)
 router.get('/health', async (ctx) => {
   console.log('Health check accessed');
@@ -947,6 +962,8 @@ router.get('/api/debug-token', async (ctx) => {
 // ⚡ CRITICAL CHANGE: Main route with automatic OAuth flow
 router.get('(/)', async (ctx) => {
     console.log('=== MAIN ROUTE ===');
+    console.log('Full URL:', ctx.url);
+    console.log('All query params:', ctx.query);
     const shop = ctx.query.shop;
     const host = ctx.query.host;
     console.log('Shop parameter:', shop);
@@ -985,170 +1002,106 @@ router.get('(/)', async (ctx) => {
         ctx.set('Content-Type', 'text/html');
         ctx.set('Content-Security-Policy', `frame-ancestors https://${shop} https://admin.shopify.com`);
         
-        ctx.body = `
-            <!DOCTYPE html>
-            <html>
-            <head>
-              <meta charset="utf-8">
-              <meta name="viewport" content="width=device-width, initial-scale=1">
-              <title>EuroZone Currency Converter</title>
-              <script src="https://unpkg.com/@shopify/app-bridge@3"></script>
-              <style>
-                body {
-                  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
-                  padding: 0;
-                  margin: 0;
-                  background: #f4f6f8;
-                }
-                .container {
-                  max-width: 800px;
-                  margin: 0 auto;
-                  padding: 20px;
-                }
-                .card {
-                  background: white;
-                  border-radius: 8px;
-                  padding: 24px;
-                  margin-bottom: 20px;
-                  box-shadow: 0 0 0 1px rgba(63,63,68,.05), 0 1px 3px 0 rgba(63,63,68,.15);
-                }
-                h1 {
-                  color: #202223;
-                  font-size: 20px;
-                  font-weight: 600;
-                  margin: 0 0 16px 0;
-                }
-                .status {
-                  display: flex;
-                  align-items: center;
-                  gap: 8px;
-                  margin-bottom: 12px;
-                }
-                .status-icon {
-                  font-size: 18px;
-                  line-height: 1;
-                }
-                .section-title {
-                  font-weight: 600;
-                  margin: 20px 0 12px 0;
-                  color: #202223;
-                }
-                ul {
-                  margin: 0;
-                  padding-left: 20px;
-                }
-                li {
-                  margin: 8px 0;
-                  color: #616161;
-                }
-                .success { color: #008060; }
-                .warning { color: #b98900; }
-                .error { color: #d72c0d; }
-                a {
-                  color: #2c6ecb;
-                  text-decoration: none;
-                }
-                a:hover {
-                  text-decoration: underline;
-                }
-                .debug-section {
-                  background: #f9fafb;
-                  border: 1px solid #e1e3e5;
-                  border-radius: 6px;
-                  padding: 16px;
-                  margin-top: 20px;
-                }
-                .app-name {
-                  background: #f3f4f6;
-                  display: inline-block;
-                  padding: 2px 8px;
-                  border-radius: 4px;
-                  font-size: 12px;
-                  color: #616161;
-                  margin-left: 8px;
-                }
-              </style>
-            </head>
-            <body>
-              <div class="container">
-                <div class="card">
-                  <h1>
-                    🎉 EuroZone Currency Converter
-                    <span class="app-name">eurozone-dual-currency-display</span>
-                  </h1>
-                  
-                  <div class="status">
-                    <span class="status-icon">🏪</span>
-                    <span>Shop: <strong>${shop}</strong></span>
-                  </div>
-                  
-                  <div class="status">
-                    <span class="status-icon">✅</span>
-                    <span class="success">
-                      Authentication: Active
-                    </span>
-                  </div>
-                  
-                  <div class="section-title">📦 Extension Status</div>
-                  <ul>
-                    <li><span class="success">✅ Thank You page - Currency converter is active and working</span></li>
-                    <li><span class="warning">⚠️ Order Status page - Extension installed but data fetch issues</span></li>
-                  </ul>
-                  
-                  <div class="section-title">📝 Known Issues</div>
-                  <ul>
-                    <li>Order Status page doesn't have access to price data through the API</li>
-                    <li>Working on alternative solutions to display converted prices</li>
-                  </ul>
-                  
-                  <div class="debug-section">
-                    <div class="section-title">🔍 Debug Tools</div>
-                    <ul>
-                      <li><a href="/api/test?shop=${shop}" target="_blank">Test Session</a></li>
-                      <li><a href="/api/shop?shop=${shop}" target="_blank">Shop Info</a></li>
-                      <li><a href="/api/order/1?shop=${shop}" target="_blank">Test Order API</a></li>
-                      <li><a href="/api/test-all?shop=${shop}" target="_blank">Comprehensive API Test</a></li>
-                    </ul>
-                  </div>
-                </div>
-              </div>
-              
-              <script>
-                // Wait for DOM to load
-                document.addEventListener('DOMContentLoaded', function() {
-                  console.log('Initializing App Bridge...');
-                  
-                  try {
-                    // Initialize App Bridge
-                    const AppBridge = window['app-bridge'];
-                    const createApp = AppBridge.createApp;
-                    
-                    const app = createApp({
-                      apiKey: '${SHOPIFY_API_KEY}',
-                      host: '${host || ''}'
-                    });
-                    
-                    console.log('App Bridge initialized successfully');
-                    
-                    // Set up TitleBar
-                    const TitleBar = AppBridge.actions.TitleBar;
-                    const myTitleBar = TitleBar.create(app, {
-                      title: 'Currency Converter'
-                    });
-                    
-                    // Stop loading bar
-                    const Loading = AppBridge.actions.Loading;
-                    const loading = Loading.create(app);
-                    loading.dispatch(Loading.Action.STOP);
-                    
-                  } catch (error) {
-                    console.error('Error initializing App Bridge:', error);
-                  }
+        // Опростен HTML за debug
+        const html = `<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>EuroZone Currency Converter</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            padding: 20px;
+            margin: 0;
+            background: #f4f6f8;
+        }
+        .debug {
+            background: #ffebee;
+            border: 1px solid #ef5350;
+            padding: 10px;
+            margin: 10px 0;
+            border-radius: 4px;
+            font-family: monospace;
+            font-size: 12px;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+        }
+        .card {
+            background: white;
+            border-radius: 8px;
+            padding: 24px;
+            margin-bottom: 20px;
+            box-shadow: 0 0 0 1px rgba(63,63,68,.05), 0 1px 3px 0 rgba(63,63,68,.15);
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="debug">
+            DEBUG INFO:<br>
+            Shop: ${shop}<br>
+            Host: ${host || 'NOT PROVIDED'}<br>
+            API Key: ${SHOPIFY_API_KEY}<br>
+            Time: ${new Date().toISOString()}<br>
+            Session exists: ${session ? 'YES' : 'NO'}
+        </div>
+        
+        <div class="card">
+            <h1>🎉 EuroZone Currency Converter</h1>
+            <p>If you see this, the page is loading correctly!</p>
+            
+            <div style="margin: 20px 0;">
+                <strong>Shop:</strong> ${shop}<br>
+                <strong>Status:</strong> <span style="color: #008060;">✅ Authentication Active</span>
+            </div>
+            
+            <h3>📦 Extension Status</h3>
+            <ul>
+                <li>✅ Thank You page - Currency converter is active and working</li>
+                <li>⚠️ Order Status page - Extension installed but data fetch issues</li>
+            </ul>
+            
+            <h3>🔍 Debug Tools</h3>
+            <ul>
+                <li><a href="/api/test?shop=${shop}" target="_blank">Test Session</a></li>
+                <li><a href="/api/shop?shop=${shop}" target="_blank">Shop Info</a></li>
+            </ul>
+        </div>
+    </div>
+    
+    <script>
+        console.log('Page loaded successfully');
+        console.log('Shop:', '${shop}');
+        console.log('Host:', '${host || 'NOT PROVIDED'}');
+        
+        // Опит за App Bridge без да спираме страницата при грешка
+        try {
+            if (window['app-bridge']) {
+                console.log('App Bridge found, initializing...');
+                const AppBridge = window['app-bridge'];
+                const app = AppBridge.createApp({
+                    apiKey: '${SHOPIFY_API_KEY}',
+                    host: '${host || ''}'
                 });
-              </script>
-            </body>
-            </html>
-          `;
+                console.log('App Bridge initialized');
+            } else {
+                console.error('App Bridge not found');
+            }
+        } catch (error) {
+            console.error('App Bridge error:', error);
+        }
+    </script>
+    
+    <!-- Load App Bridge from CDN -->
+    <script src="https://unpkg.com/@shopify/app-bridge@3"></script>
+</body>
+</html>`;
+        
+        ctx.body = html;
+        console.log('HTML response sent, length:', html.length);
     } catch (error) {
         console.error('Error in main route:', error);
         ctx.status = 500;
