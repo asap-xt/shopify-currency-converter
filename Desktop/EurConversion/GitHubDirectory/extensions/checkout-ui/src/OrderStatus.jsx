@@ -39,7 +39,7 @@ export default extension(
         const appUrl = 'https://shopify-currency-converter-production.up.railway.app';
         // Използваме api.shop.myshopifyDomain за да вземем домейна на магазина
         const fetchUrl = `${appUrl}/api/order/${orderId}?shop=${api.shop.myshopifyDomain}`;
-
+	console.log('FETCH URL:', fetchUrl);
         fetch(fetchUrl)
           .then(res => {
             if (!res.ok) {
