@@ -991,6 +991,7 @@ router.get('(/)', async (ctx) => {
             <head>
               <meta charset="utf-8">
               <meta name="viewport" content="width=device-width, initial-scale=1">
+              <title>EuroZone Currency Converter</title>
               <script src="https://unpkg.com/@shopify/app-bridge@3"></script>
               <style>
                 body {
@@ -1024,8 +1025,8 @@ router.get('(/)', async (ctx) => {
                   margin-bottom: 12px;
                 }
                 .status-icon {
-                  width: 20px;
-                  height: 20px;
+                  font-size: 18px;
+                  line-height: 1;
                 }
                 .section-title {
                   font-weight: 600;
@@ -1057,12 +1058,24 @@ router.get('(/)', async (ctx) => {
                   padding: 16px;
                   margin-top: 20px;
                 }
+                .app-name {
+                  background: #f3f4f6;
+                  display: inline-block;
+                  padding: 2px 8px;
+                  border-radius: 4px;
+                  font-size: 12px;
+                  color: #616161;
+                  margin-left: 8px;
+                }
               </style>
             </head>
             <body>
               <div class="container">
                 <div class="card">
-                  <h1>🎉 EuroZone Currency Converter</h1>
+                  <h1>
+                    🎉 EuroZone Currency Converter
+                    <span class="app-name">eurozone-dual-currency-display</span>
+                  </h1>
                   
                   <div class="status">
                     <span class="status-icon">🏪</span>
@@ -1078,8 +1091,8 @@ router.get('(/)', async (ctx) => {
                   
                   <div class="section-title">📦 Extension Status</div>
                   <ul>
-                    <li class="success">✅ Thank You page - Currency converter is active and working</li>
-                    <li class="warning">⚠️ Order Status page - Extension installed but data fetch issues</li>
+                    <li><span class="success">✅ Thank You page - Currency converter is active and working</span></li>
+                    <li><span class="warning">⚠️ Order Status page - Extension installed but data fetch issues</span></li>
                   </ul>
                   
                   <div class="section-title">📝 Known Issues</div>
@@ -1101,21 +1114,37 @@ router.get('(/)', async (ctx) => {
               </div>
               
               <script>
-                // Initialize App Bridge
-                const AppBridge = window['app-bridge'];
-                const app = AppBridge.createApp({
-                  apiKey: '${SHOPIFY_API_KEY}',
-                  host: '${host || new URLSearchParams(window.location.search).get('host') || ''}'
+                // Wait for DOM to load
+                document.addEventListener('DOMContentLoaded', function() {
+                  console.log('Initializing App Bridge...');
+                  
+                  try {
+                    // Initialize App Bridge
+                    const AppBridge = window['app-bridge'];
+                    const createApp = AppBridge.createApp;
+                    
+                    const app = createApp({
+                      apiKey: '${SHOPIFY_API_KEY}',
+                      host: '${host || ''}'
+                    });
+                    
+                    console.log('App Bridge initialized successfully');
+                    
+                    // Set up TitleBar
+                    const TitleBar = AppBridge.actions.TitleBar;
+                    const myTitleBar = TitleBar.create(app, {
+                      title: 'Currency Converter'
+                    });
+                    
+                    // Stop loading bar
+                    const Loading = AppBridge.actions.Loading;
+                    const loading = Loading.create(app);
+                    loading.dispatch(Loading.Action.STOP);
+                    
+                  } catch (error) {
+                    console.error('Error initializing App Bridge:', error);
+                  }
                 });
-
-                // Set up navigation if needed
-                const History = AppBridge.actions.History;
-                const history = History.create(app);
-                
-                // Optional: Add loading bar
-                const Loading = AppBridge.actions.Loading;
-                const loading = Loading.create(app);
-                loading.dispatch(Loading.Action.STOP);
               </script>
             </body>
             </html>
