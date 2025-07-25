@@ -2,8 +2,8 @@
 import 'dotenv/config';
 import '@shopify/shopify-api/adapters/node';
 import Koa from 'koa';
-import cors from '@koa/cors'; // Use import style for CORS
-import koaSession from 'koa-session'; // преименувах го, за да не се бърка с обекта от Shopify
+import cors from '@koa/cors';
+import koaSession from 'koa-session';
 import Router from 'koa-router';
 import getRawBody from 'raw-body';
 import { shopifyApi, LATEST_API_VERSION, BillingInterval, Session } from '@shopify/shopify-api';
@@ -92,39 +92,9 @@ try {
 const app = new Koa();
 app.keys = [SHOPIFY_API_SECRET];
 
-// Session Token Authentication middleware
-const verifySessionToken = async (ctx, next) => {
-  const sessionToken = ctx.headers.authorization?.replace('Bearer ', '');
-  
-  if (!sessionToken) {
-    ctx.status = 401;
-    ctx.body = { error: 'Missing session token' };
-    return;
-  }
-  
-  try {
-    // Decode and verify the session token
-    const payload = Shopify.utils.decodeSessionToken(sessionToken);
-    const { dest: shop } = payload;
-    
-    // Check if we have a stored session for this shop
-    const sessionId = `${shop}-offline`;
-    let session = await memorySessionStorage.loadSession(sessionId);
-    
-    ctx.state.session = session;
-    ctx.state.shop = shop;
-    ctx.state.sessionToken = sessionToken;
-    await next();
-  } catch (error) {
-    console.error('Session token verification failed:', error);
-    ctx.status = 401;
-    ctx.body = { error: 'Invalid session token' };
-  }
-};
-
 // Add CORS for Shopify extensions
 app.use(cors({
-  origin: ['https://extensions.shopifycdn.com', '*'],
+  origin: '*',
   credentials: true
 }));
 
@@ -171,35 +141,6 @@ router.get('/debug', async (ctx) => {
   };
 });
 
-// Embedded app auth endpoint
-router.post('/api/auth', verifySessionToken, async (ctx) => {
-  console.log('=== EMBEDDED APP AUTH CHECK ===');
-  
-  try {
-    const shop = ctx.state.shop;
-    const existingSession = ctx.state.session;
-    
-    if (existingSession && existingSession.accessToken) {
-      console.log('Session exists with access token');
-      ctx.body = { success: true, shop, authenticated: true };
-      return;
-    }
-    
-    // Need to authenticate
-    console.log('No access token, need OAuth');
-    const authUrl = `https://${shop}/admin/oauth/authorize?` + 
-      `client_id=${SHOPIFY_API_KEY}&` +
-      `scope=${SCOPES}&` +
-      `redirect_uri=${encodeURIComponent(HOST + '/auth/callback')}`;
-    
-    ctx.body = { authUrl, authenticated: false };
-  } catch (error) {
-    console.error('Embedded auth error:', error);
-    ctx.status = 500;
-    ctx.body = { error: error.message };
-  }
-});
-
 // OAuth start
 router.get('/auth', async (ctx) => {
   console.log('=== AUTH START ===');
@@ -235,7 +176,7 @@ router.get('/auth/callback', async (ctx) => {
     console.log('=== AUTH CALLBACK ===');
     console.log('Callback query:', ctx.query);
     
-    const { code, hmac, shop, state, timestamp, embedded } = ctx.query;
+    const { code, hmac, shop, state, timestamp } = ctx.query;
     
     if (!code || !shop) {
         console.error('Missing required OAuth parameters');
@@ -282,16 +223,9 @@ router.get('/auth/callback', async (ctx) => {
         console.log('Session stored successfully');
         
         // За embedded apps, redirect към admin
-        if (embedded === '1') {
-            const redirectUrl = `https://${shop}/admin/apps/${SHOPIFY_API_KEY}`;
-            console.log('Redirecting to admin (embedded):', redirectUrl);
-            ctx.redirect(redirectUrl);
-        } else {
-            // Original redirect за non-embedded
-            const redirectUrl = `/?shop=${shop}&host=${ctx.query.host}`;
-            console.log('Redirecting to:', redirectUrl);
-            ctx.redirect(redirectUrl);
-        }
+        const redirectUrl = `https://${shop}/admin/apps/${SHOPIFY_API_KEY}`;
+        console.log('Redirecting to admin:', redirectUrl);
+        ctx.redirect(redirectUrl);
         
     } catch (error) {
         console.error("Auth callback failed:", error);
@@ -1010,107 +944,86 @@ router.get('/api/debug-token', async (ctx) => {
     }
 });
 
-// Main route за embedded app
+// Middleware за всички останали заявки, за да се покаже главната страница
 router.get('(/)', async (ctx) => {
     console.log('=== MAIN ROUTE ===');
     const shop = ctx.query.shop;
-    const host = ctx.query.host;
-    
-    if (!shop) {
-        ctx.body = "Missing shop parameter. Please install the app through Shopify.";
-        ctx.status = 400;
-        return;
-    }
-    
-    // Always return HTML for embedded app
-    ctx.set('Content-Type', 'text/html');
-    ctx.body = `
-        <!DOCTYPE html>
-        <html>
-        <head>
-          <script src="https://unpkg.com/@shopify/app-bridge@3"></script>
-          <script src="https://unpkg.com/@shopify/app-bridge-utils@3"></script>
-          <style>
-            body { font-family: -apple-system, sans-serif; padding: 20px; }
-            .status { padding: 10px; margin: 10px 0; border-radius: 4px; }
-            .loading { background: #f0f0f0; }
-            .success { background: #d4edda; color: #155724; }
-            .error { background: #f8d7da; color: #721c24; }
-          </style>
-        </head>
-        <body>
-          <h1>🎉 Currency Converter App</h1>
-          <p><strong>Shop:</strong> ${shop}</p>
-          <div id="status" class="status loading">⏳ Checking authentication...</div>
-          
-          <div id="content" style="display: none;">
-            <hr>
-            <h3>Extension Status:</h3>
-            <ul>
-              <li>✅ Thank You page - Currency converter active</li>
-              <li>🔄 Order Status page - In development</li>
-            </ul>
-            
-            <h3>Quick Links:</h3>
-            <ul>
-              <li><a href="/api/test?shop=${shop}" target="_blank">Test Session</a></li>
-              <li><a href="/api/shop?shop=${shop}" target="_blank">Shop Info</a></li>
-              <li><a href="/api/order/1?shop=${shop}" target="_blank">Test Order API</a></li>
-            </ul>
-          </div>
-          
-          <script>
-            const AppBridge = window['app-bridge'];
-            const AppBridgeUtils = window['app-bridge-utils'];
-            
-            const app = AppBridge.createApp({
-              apiKey: '${SHOPIFY_API_KEY}',
-              host: '${host || ''}',
-            });
-            
-            async function checkAuth() {
-              try {
-                // Get session token
-                const token = await AppBridgeUtils.getSessionToken(app);
-                console.log('Got session token');
-                
-                // Check authentication status
-                const response = await fetch('/api/auth', {
-                  method: 'POST',
-                  headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': 'Bearer ' + token
-                  }
+    console.log('Shop parameter:', shop);
+
+    try {
+        if (!shop) {
+            console.log('No shop parameter');
+            ctx.body = "Missing shop parameter. Please install the app through Shopify.";
+            ctx.status = 400;
+            return;
+        }
+
+        // Проверка дали имаме активна сесия
+        const sessionId = `${shop}-offline`;
+        const session = await memorySessionStorage.loadSession(sessionId);
+        console.log('Session check for:', sessionId, session ? 'FOUND' : 'NOT FOUND');
+
+        if (!session || !session.accessToken) {
+            // Ако няма сесия, пращаме към auth
+            console.log('No valid session, redirecting to auth');
+            ctx.redirect(`/auth?shop=${shop}`);
+            return;
+        }
+        
+        console.log('Session found, showing app interface');
+        // Ако има сесия, показваме HTML
+        ctx.set('Content-Type', 'text/html');
+        ctx.body = `
+            <!DOCTYPE html>
+            <html>
+            <head>
+              <script src="https://unpkg.com/@shopify/app-bridge@3"></script>
+              <script>
+                const app = AppBridge.createApp({
+                  apiKey: '${SHOPIFY_API_KEY}',
+                  host: new URL(location.href).searchParams.get("host"),
                 });
-                
-                const data = await response.json();
-                console.log('Auth response:', data);
-                
-                if (data.authenticated) {
-                  document.getElementById('status').className = 'status success';
-                  document.getElementById('status').innerHTML = '✅ Authenticated successfully!';
-                  document.getElementById('content').style.display = 'block';
-                } else if (data.authUrl) {
-                  document.getElementById('status').innerHTML = '🔄 Redirecting to authenticate...';
-                  // Use App Bridge to redirect
-                  const redirect = AppBridge.actions.Redirect.create(app);
-                  redirect.dispatch(AppBridge.actions.Redirect.Action.REMOTE, data.authUrl + '&embedded=1');
-                } else {
-                  throw new Error('Unexpected response');
-                }
-              } catch (error) {
-                console.error('Auth check failed:', error);
-                document.getElementById('status').className = 'status error';
-                document.getElementById('status').innerHTML = '❌ Error: ' + error.message;
-              }
-            }
-            
-            // Start auth check when page loads
-            checkAuth();
-          </script>
-        </body>
-        </html>
-    `;
+              </script>
+            </head>
+            <body>
+              <h1>🎉 Currency Converter App is running!</h1>
+              <p><strong>Shop:</strong> ${shop}</p>
+              <p><strong>Session ID:</strong> ${sessionId}</p>
+              <p><strong>Access Token:</strong> ${session.accessToken ? '✅ Present' : '❌ Missing'}</p>
+              <p><strong>Scopes:</strong> ${session.scope || SCOPES}</p>
+              <p><strong>Timestamp:</strong> ${new Date().toISOString()}</p>
+              <hr>
+              <h3>Extension Status:</h3>
+              <ul>
+                <li>✅ Thank You page - Currency converter active</li>
+                <li>🔄 Order Status page - In development</li>
+              </ul>
+              <hr>
+              <h3>API Test Links:</h3>
+              <ul>
+                <li><a href="/api/test?shop=${shop}" target="_blank">Test API Session</a></li>
+                <li><a href="/api/test-all?shop=${shop}" target="_blank">🔍 Test ALL APIs (Comprehensive)</a></li>
+                <li><hr></li>
+                <li><strong>Known Working APIs:</strong></li>
+                <li><a href="/api/themes?shop=${shop}" target="_blank">🎨 Themes API ✅</a></li>
+                <li><a href="/api/shop?shop=${shop}" target="_blank">🏪 Shop Info API ✅</a></li>
+                <li><hr></li>
+                <li><strong>Blocked APIs (Protected Customer Data):</strong></li>
+                <li><a href="/api/orders?shop=${shop}" target="_blank">🛍️ Orders API ❌</a></li>
+                <li><a href="/api/products?shop=${shop}" target="_blank">📦 Products API ❌</a></li>
+                <li><hr></li>
+                <li><a href="/api/debug-token?shop=${shop}" target="_blank">🔍 Debug Token Permissions</a></li>
+                <li><a href="/debug" target="_blank">Debug Info</a></li>
+                <li><a href="/health" target="_blank">Health Check</a></li>
+              </ul>
+            </body>
+            </html>
+          `;
+    } catch (error) {
+        console.error('Error in main route:', error);
+        ctx.status = 500;
+        ctx.body = 'Internal error: ' + error.message;
+    }
 });
 
 app.use(router.routes());
@@ -1132,5 +1045,3 @@ app.listen(PORT, '0.0.0.0', function() {
   console.error('FATAL: Server failed to start:', err);
   process.exit(1);
 });
-
-// Updated: Session token auth added
