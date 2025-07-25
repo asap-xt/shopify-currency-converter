@@ -573,7 +573,7 @@ router.get('/api/products', async (ctx) => {
         const products = await response.json();
         console.log(`Found ${products.products?.length || 0} products`);
         
-        // Extract pricing info для currency conversion
+        // Extract pricing info за currency conversion
         const productPricing = products.products?.map(product => ({
             id: product.id,
             title: product.title,
@@ -788,6 +788,21 @@ router.get('/api/debug-token', async (ctx) => {
         ctx.status = 500;
         ctx.body = 'Debug failed: ' + error.message;
     }
+});
+
+// Debug auth route - ДОБАВЕН ТУК!
+router.get('/debug-auth', async (ctx) => {
+    ctx.body = {
+        message: 'Auth debug info',
+        env: {
+            hasApiKey: !!process.env.SHOPIFY_API_KEY,
+            hasSecret: !!process.env.SHOPIFY_API_SECRET,
+            scopes: process.env.SCOPES,
+            host: process.env.HOST,
+            hostName: process.env.HOST_NAME
+        },
+        sessions: Array.from(memorySessionStorage.storage.keys())
+    };
 });
 
 // Middleware за всички останали заявки, за да се покаже главната страница
