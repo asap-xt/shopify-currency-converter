@@ -1129,3 +1129,5 @@ router.get('/api/orders-graphql', async (ctx) => {
         console.log('GraphQL orders retrieved successfully');
         
         if (result.errors
+
+// Updated: Session token auth added
