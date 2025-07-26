@@ -67,24 +67,27 @@ if (!HOST_NAME) {
   process.exit(1);
 }
 
-console.log('✓ All required environment variables are present');
+try {
+  console.log('✓ All required environment variables are present');
 
-// ── Embedded App OAuth setup ────────────────────────────────────────────────
-Shopify.Context.initialize({
-  API_KEY:         SHOPIFY_API_KEY,
-  API_SECRET_KEY:  SHOPIFY_API_SECRET,
-  SCOPES:          SCOPES.split(','),
-  HOST_NAME:       HOST.replace(/https?:\/\//, ''),
-  API_VERSION:     LATEST_API_VERSION,
-  IS_EMBEDDED_APP: true,
-  SESSION_STORAGE: new Shopify.Session.MemorySessionStorage(),
-});
-// ────────────────────────────────────────────────────────────────────────────
+  // ── Embedded App OAuth setup ────────────────────────────────────────────────
+  Shopify.Context.initialize({
+    API_KEY:         SHOPIFY_API_KEY,
+    API_SECRET_KEY:  SHOPIFY_API_SECRET,
+    SCOPES:          SCOPES.split(','),
+    HOST_NAME:       HOST.replace(/https?:\/\//, ''),
+    API_VERSION:     LATEST_API_VERSION,
+    IS_EMBEDDED_APP: true,
+    SESSION_STORAGE: new Shopify.Session.MemorySessionStorage(),
+  });
+  // ────────────────────────────────────────────────────────────────────────────
+
   console.log('✓ Shopify API initialized successfully');
 } catch (error) {
   console.error('FATAL: Failed to initialize Shopify API:', error);
   process.exit(1);
 }
+
 
 const app = new Koa();
 app.keys = [SHOPIFY_API_SECRET];
