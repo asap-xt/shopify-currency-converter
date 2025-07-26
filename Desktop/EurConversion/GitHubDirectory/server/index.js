@@ -1,4 +1,7 @@
 // server/index.js
+// Force redeploy: 2025-07-25T21:15:00Z
+import 'dotenv/config';
+// server/index.js
 import 'dotenv/config';
 import '@shopify/shopify-api/adapters/node';
 import Koa from 'koa';
