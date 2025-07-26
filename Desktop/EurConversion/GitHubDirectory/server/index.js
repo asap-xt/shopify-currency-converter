@@ -1,4 +1,3 @@
-// === Force redeploy: App Bridge OAuth fix ===
 // server/index.js
 import 'dotenv/config';
 import '@shopify/shopify-api/adapters/node';
