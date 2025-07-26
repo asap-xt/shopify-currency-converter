@@ -69,17 +69,17 @@ if (!HOST_NAME) {
 
 console.log('✓ All required environment variables are present');
 
-// Инициализация на Shopify API клиента
-let Shopify;
-try {
-  console.log('Initializing Shopify API...');
-  Shopify = shopifyApi({
-    apiKey:         SHOPIFY_API_KEY,
-    apiSecretKey:   SHOPIFY_API_SECRET,
-    scopes:         SCOPES.split(','),
-    hostName:       HOST_NAME,
-    apiVersion:     LATEST_API_VERSION,
-    isEmbeddedApp:  true,
+// ── Embedded App OAuth setup ────────────────────────────────────────────────
+Shopify.Context.initialize({
+  API_KEY:         SHOPIFY_API_KEY,
+  API_SECRET_KEY:  SHOPIFY_API_SECRET,
+  SCOPES:          SCOPES.split(','),
+  HOST_NAME:       HOST.replace(/https?:\/\//, ''),
+  API_VERSION:     LATEST_API_VERSION,
+  IS_EMBEDDED_APP: true,
+  SESSION_STORAGE: new Shopify.Session.MemorySessionStorage(),
+});
+// ────────────────────────────────────────────────────────────────────────────
     // Използваме нашата собствена имплементация:
     sessionStorage: memorySessionStorage,
   });
@@ -135,37 +135,29 @@ router.get('/debug', async (ctx) => {
   };
 });
 
-// OAuth start - правилен начин за embedded apps
+// ── OAuth start – embedded app ───────────────────────────────────────────────
 router.get('/auth', async (ctx) => {
-  console.log('=== AUTH START ===');
   const shop = ctx.query.shop;
-  console.log('Shop parameter:', shop);
-  
-  if (!shop) {
-    console.log('Missing shop parameter');
-    ctx.throw(400, 'Missing shop parameter');
-    return;
-  }
-  
+  if (!shop) ctx.throw(400, 'Missing shop parameter');
+  const redirectUrl = await Shopify.Auth.beginAuth(
+    ctx.req, ctx.res, shop, '/auth/callback', false
+  );
+  ctx.redirect(redirectUrl);
+});
+
+router.get('/auth/callback', async (ctx) => {
   try {
-    console.log('Creating OAuth URL...');
-    // Генерираме state за сигурност
-    const state = randomBytes(16).toString('hex');
-    
-    const authUrl = `https://${shop}/admin/oauth/authorize?` + 
-      `client_id=${SHOPIFY_API_KEY}&` +
-      `scope=${SCOPES}&` +
-      `redirect_uri=${encodeURIComponent(HOST + '/auth/callback')}&` +
-      `state=${state}`;
-    
-    console.log('OAuth URL generated');
-    ctx.redirect(authUrl);
-  } catch (error) {
-    console.error('Error creating OAuth URL:', error);
-    ctx.status = 500;
-    ctx.body = 'Auth initialization failed: ' + error.message;
+    const session = await Shopify.Auth.validateAuthCallback(
+      ctx.req, ctx.res, ctx.query
+    );
+    const host = ctx.query.host;
+    ctx.redirect(`/?shop=${session.shop}&host=${host}`);
+  } catch (err) {
+    console.error('Auth callback error:', err);
+    ctx.throw(500, err.message);
   }
 });
+// ────────────────────────────────────────────────────────────────────────────
 
 // OAuth callback
 router.get('/auth/callback', async (ctx) => {
@@ -1113,6 +1105,13 @@ app.use(router.allowedMethods());
 const PORT = process.env.PORT || 3000;
 
 console.log(`Starting server on port ${PORT}...`);
+
+// Fallback: ако няма сесия или не е аутентикиран, пускаме OAuth
+app.use((req, res) => {
+  const shop = req.query.shop || req.session.shop;
+  const host = req.query.host;
+  res.redirect(`/auth?shop=${shop}&host=${host}`);
+});
 
 // Bind към 0.0.0.0 за Railway compatibility
 app.listen(PORT, '0.0.0.0', function() {
