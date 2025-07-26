@@ -27,7 +27,7 @@ export default reactExtension(
 );
 
 function Extension() {
-  // Вземаме валутата на поръчката
+  // Вземаме валутата
   const currency = useCurrency();
   
   // Вземаме адреса на доставка
@@ -38,6 +38,12 @@ function Extension() {
   
   // Продуктите в поръчката
   const lines = useCartLines();
+  
+  // ВРЕМЕННО - НЕ ПРАВИМ НИКАКВИ ПРОВЕРКИ
+  // Просто показваме debug информация
+  
+  const orderCurrency = total?.currencyCode || currency;
+  const countryCode = shippingAddress?.countryCode;
   
   // Breakdown данни
   const api = useApi();
@@ -54,54 +60,121 @@ function Extension() {
       }
     }
   } catch (error) {
-    console.log('Error accessing cost data:', error);
+    console.log('Error:', error);
   }
   
-  // ПОДРОБЕН DEBUG - да видим всички данни
-  console.log('=== CURRENCY DEBUG ===');
-  console.log('useCurrency():', currency);
-  console.log('total object:', JSON.stringify(total, null, 2));
-  console.log('total.currencyCode:', total?.currencyCode);
-  console.log('shipping address:', JSON.stringify(shippingAddress, null, 2));
-  
-  // Проверяваме всички възможни места за валута
-  const possibleCurrencies = {
-    fromUseCurrency: currency,
-    fromTotalCurrencyCode: total?.currencyCode,
-    fromLineCurrency: lines?.[0]?.cost?.totalAmount?.currencyCode,
-    fromSubtotalCurrency: subtotal?.currencyCode,
-    fromShippingCurrency: shipping?.currencyCode
-  };
-  
-  console.log('All possible currencies:', possibleCurrencies);
-  
-  // Временно показваме debug информация
+  const totalBGN = total?.amount || 0;
+  const totalEUR = convertToEUR(totalBGN);
+
+  // ВИНАГИ показваме UI с debug информация
   return (
     <View padding="base" border="base" background="subdued">
       <BlockStack spacing="base">
+        {/* DEBUG ИНФОРМАЦИЯ */}
+        <View padding="tight" background="critical" cornerRadius="base">
+          <BlockStack spacing="tight">
+            <Text size="small" appearance="critical" emphasis="bold">
+              🔍 DEBUG INFO:
+            </Text>
+            <Text size="small" appearance="critical">
+              Currency from useCurrency(): {String(currency)}
+            </Text>
+            <Text size="small" appearance="critical">
+              Currency from total: {String(total?.currencyCode)}
+            </Text>
+            <Text size="small" appearance="critical">
+              Country: {String(countryCode)}
+            </Text>
+            <Text size="small" appearance="critical">
+              Total amount: {String(total?.amount)}
+            </Text>
+          </BlockStack>
+        </View>
+        
+        {/* Заглавие с флагове */}
         <Text size="medium" emphasis="bold">
-          🔍 DEBUG INFO
+          🚨 ТЕСТ ПРОМЯНА 🚨
         </Text>
         
-        <Text size="small">
-          useCurrency: {String(currency)}
-        </Text>
+        {/* Разбивка секция */}
+        <View padding="base" background="base" cornerRadius="base">
+          <BlockStack spacing="base">
+            <Text size="small" emphasis="bold">
+              Продукти:
+            </Text>
+            
+            {/* Продукти по отделно */}
+            {lines && lines.length > 0 && (
+              <BlockStack spacing="tight">
+                {lines.map((line, index) => {
+                  const title =
+                    line.merchandise.product?.title ?? 
+                    line.merchandise.title ??
+                    'Продукт';
+                  const lineBGN = line.cost?.totalAmount?.amount || 0;
+                  const lineEUR = convertToEUR(lineBGN);
+
+                  return (
+                    <InlineLayout
+                      key={line.id || index}
+                      spacing="base"
+                      blockAlignment="center"
+                    >
+                      <View inlineAlignment="start" minInlineSize="fill">
+                        <Text size="small">
+                          {line.quantity}× {title}
+                        </Text>
+                      </View>
+                      <View inlineAlignment="end">
+                        <Text size="small" emphasis="bold">
+                          {lineBGN.toFixed(2)} ЛВ / {lineEUR} EUR
+                        </Text>
+                      </View>
+                    </InlineLayout>
+                  );
+                })}
+              </BlockStack>
+            )}
+
+            {/* Доставка в BGN / EUR */}
+            {shipping && shipping.amount > 0 && (
+              <>
+                <Divider />
+                <InlineLayout spacing="base" blockAlignment="center">
+                  <View inlineAlignment="start" minInlineSize="fill">
+                    <Text size="small">Доставка</Text>
+                  </View>
+                  <View inlineAlignment="end">
+                    <Text size="small" emphasis="bold">
+                      {shipping.amount.toFixed(2)} ЛВ / {convertToEUR(shipping.amount)} EUR
+                    </Text>
+                  </View>
+                </InlineLayout>
+              </>
+            )}
+          </BlockStack>
+        </View>
         
-        <Text size="small">
-          total.currencyCode: {String(total?.currencyCode)}
-        </Text>
+        {/* Обща сума */}
+        <View padding="tight" background="interactive" cornerRadius="base">
+          <InlineLayout spacing="base" blockAlignment="center">
+            <View inlineAlignment="start" minInlineSize="fill">
+              <Text size="medium" emphasis="bold">Общо:</Text>
+            </View>
+            <View inlineAlignment="end">
+              <Text size="large" emphasis="bold">
+                {totalBGN.toFixed(2)} ЛВ / {totalEUR} EUR
+              </Text>
+            </View>
+          </InlineLayout>
+        </View>
         
-        <Text size="small">
-          Country: {String(shippingAddress?.countryCode)}
-        </Text>
-        
-        <Text size="small">
-          Total amount: {String(total?.amount)}
-        </Text>
-        
-        <Text size="small" appearance="critical">
-          Check browser console for detailed debug info
-        </Text>
+        {/* Курс */}
+        <View padding="extraTight">
+          <Text size="small" appearance="subdued">
+            Курс: 1 EUR = {EUR_TO_BGN_RATE} BGN
+          </Text>
+        </View>
       </BlockStack>
     </View>
   );
