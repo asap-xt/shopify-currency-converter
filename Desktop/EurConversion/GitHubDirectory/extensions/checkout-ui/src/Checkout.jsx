@@ -54,20 +54,39 @@ function Extension() {
       }
     }
   } catch (error) {
-    console.log('Error:', error);
+    console.log('Error accessing cost data:', error);
   }
   
+  // DEBUG: Логваме какво получаваме
+  console.log('Currency:', currency);
+  console.log('Shipping Address:', shippingAddress);
+  console.log('Country Code:', shippingAddress?.countryCode);
+  
   // ПРОВЕРКА 1: Валутата трябва да е BGN
-  if (currency !== 'BGN') {
-    return null; // Не показваме нищо
+  // Понякога currency идва като обект със свойство currencyCode
+  const currencyCode = typeof currency === 'string' ? currency : currency?.currencyCode;
+  
+  if (currencyCode !== 'BGN') {
+    console.log('Currency is not BGN, hiding extension');
+    return null;
   }
   
   // ПРОВЕРКА 2: Адресът трябва да е в България
-  if (shippingAddress && shippingAddress.countryCode !== 'BG') {
-    return null; // Не показваме нищо
+  // Проверяваме и двата възможни начина за достъп до country code
+  const countryCode = shippingAddress?.countryCode || shippingAddress?.country;
+  
+  if (!countryCode || countryCode !== 'BG') {
+    console.log('Country is not BG, hiding extension');
+    return null;
   }
   
-  const totalBGN = total?.amount || 0;
+  // Ако няма обща сума, не показваме нищо
+  if (!total || !total.amount) {
+    console.log('No total amount, hiding extension');
+    return null;
+  }
+  
+  const totalBGN = total.amount;
   const totalEUR = convertToEUR(totalBGN);
 
   // Нормалният UI за BGN поръчки в България
@@ -92,8 +111,9 @@ function Extension() {
                 {lines.map((line, index) => {
                   const title =
                     line.merchandise.product?.title ?? 
-                    line.merchandise.title;
-                  const lineBGN = line.cost.totalAmount.amount;
+                    line.merchandise.title ??
+                    'Продукт';
+                  const lineBGN = line.cost?.totalAmount?.amount || 0;
                   const lineEUR = convertToEUR(lineBGN);
 
                   return (
@@ -154,7 +174,7 @@ function Extension() {
         {/* Курс */}
         <View padding="extraTight">
           <Text size="small" appearance="subdued">
-            Курс: 1 EUR = {EUR_TO_BGN_RATE} BGN
+            Курс: 1 EUR = {EUR_TO_BGN_RATE} BGN (фиксиран курс на БНБ)
           </Text>
         </View>
       </BlockStack>
