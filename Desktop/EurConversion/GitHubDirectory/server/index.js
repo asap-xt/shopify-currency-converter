@@ -1,6 +1,4 @@
-// server/index.js
-// Force redeploy: 2025-07-25T21:15:00Z
-import 'dotenv/config';
+// === Force redeploy: App Bridge OAuth fix ===
 // server/index.js
 import 'dotenv/config';
 import '@shopify/shopify-api/adapters/node';
