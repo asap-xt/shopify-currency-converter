@@ -26,8 +26,22 @@ if (!SHOPIFY_API_KEY || !SHOPIFY_API_SECRET || !SCOPES || !HOST) {
   process.exit(1);
 }
 
-// --- КОРЕКЦИЯ: Използваме вградения MemorySessionStorage за простота и съвместимост ---
-const sessionStorage = new Shopify.Session.MemorySessionStorage();
+// --- ВАШИЯТ ОРИГИНАЛЕН SESSION STORAGE ОСТАВА ---
+// Той е независим и работи перфектно с новата инициализация.
+const memorySessionStorage = {
+  storage: new Map(),
+  async storeSession(session) {
+    this.storage.set(session.id, session);
+    return true;
+  },
+  async loadSession(id) {
+    return this.storage.get(id);
+  },
+  async deleteSession(id) {
+    this.storage.delete(id);
+    return true;
+  },
+};
 
 // --- КОРЕКЦИЯ: Правилна и пълна инициализация на Shopify API ---
 const Shopify = shopifyApi({
@@ -37,7 +51,7 @@ const Shopify = shopifyApi({
   hostName:       HOST.replace(/https?:\/\//, ''),
   apiVersion:     LATEST_API_VERSION,
   isEmbeddedApp:  true,
-  sessionStorage: sessionStorage, // Подаваме session storage тук
+  sessionStorage: memorySessionStorage, // Подаваме вашия session storage тук
   // Задължително е да дефинирате webhook за изтриване на приложението
   webhooks: {
     APP_UNINSTALLED: {
@@ -70,7 +84,12 @@ app.use(koaSession({ sameSite: 'none', secure: true }, app));
 // --- КОРЕКЦИЯ: Middleware за обработка на Webhooks ---
 router.post('/webhooks', async (ctx) => {
     try {
-      const rawBody = await ctx.req.text(); // Koa body parser може да пречи, затова четем ръчно
+      const rawBody = await new Promise((resolve, reject) => {
+        let data = '';
+        ctx.req.on('data', chunk => data += chunk);
+        ctx.req.on('end', () => resolve(data));
+        ctx.req.on('error', err => reject(err));
+      });
       await Shopify.Webhooks.Registry.process({
         rawBody: rawBody,
         rawRequest: ctx.req,
