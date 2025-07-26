@@ -80,8 +80,6 @@ Shopify.Context.initialize({
   SESSION_STORAGE: new Shopify.Session.MemorySessionStorage(),
 });
 // ────────────────────────────────────────────────────────────────────────────
-    // Използваме нашата собствена имплементация:
-    sessionStorage: memorySessionStorage,
   console.log('✓ Shopify API initialized successfully');
 } catch (error) {
   console.error('FATAL: Failed to initialize Shopify API:', error);
