@@ -654,3 +654,54 @@ router.get('(/)', async (ctx) => {
           console.error('Failed to load shop data');
           document.getElementById('loading').innerHTML = 'Грешка при зареждане';
         }
+      } catch (error) {
+        console.error('Error loading app data:', error);
+        document.getElementById('loading').innerHTML = 'Грешка при зареждане';
+      }
+    }
+    
+    setTimeout(loadAppData, 1000);
+  </script>
+</body>
+</html>
+  `;
+});
+
+// Debug route
+router.get('/debug', async (ctx) => {
+  const allSessions = [];
+  for (const [id, session] of memorySessionStorage.storage) {
+    allSessions.push({
+      id: id,
+      shop: session.shop,
+      isOnline: session.isOnline,
+      hasToken: !!session.accessToken && session.accessToken !== 'placeholder'
+    });
+  }
+  
+  ctx.body = {
+    message: 'Debug info',
+    timestamp: new Date().toISOString(),
+    environment: {
+      nodeVersion: process.version,
+      hasShopifyKey: !!SHOPIFY_API_KEY,
+      scopes: SCOPES,
+      host: HOST
+    },
+    sessions: allSessions
+  };
+});
+
+app.use(router.routes());
+app.use(router.allowedMethods());
+
+const PORT = process.env.PORT || 3000;
+
+app.listen(PORT, '0.0.0.0', function() {
+  console.log(`✓ Server listening on port ${PORT}`);
+  console.log(`✓ Using Token Exchange authentication (Shopify managed install)`);
+  console.log(`✓ App URL: ${HOST}`);
+}).on('error', (err) => {
+  console.error('FATAL: Server failed to start:', err);
+  process.exit(1);
+});
