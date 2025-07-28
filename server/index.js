@@ -101,73 +101,103 @@ const router = new Router();
 
 // Mandatory compliance webhooks
 router.post('/webhooks/customers/data_request', async (ctx) => {
-  const hmacHeader = ctx.get('X-Shopify-Hmac-Sha256');
-  const body = ctx.request.rawBody;
- 
-router.post('/webhooks/customers/data_request', async (ctx) => {
-  const hmacHeader = ctx.get('X-Shopify-Hmac-Sha256');
-  const body       = ctx.request.rawBody;
-  const secret     = process.env.SHOPIFY_API_SECRET;
-
-  // DEBUG: see what values we're comparing
-  console.log('🔐 Secret in use:', secret);
-  console.log('🔐 Incoming HMAC:', hmacHeader);
-  console.log('🔐 Raw body:', body);
-
-  const hash = crypto
-    .createHmac('sha256', secret)
-    .update(body, 'utf8')
-    .digest('base64');
-
-  console.log('🔐 Computed HMAC:', hash);
-
-  if (hash !== hmacHeader) {
-    ctx.status = 401;
-    return;
-  }
-  …
-});
- 
-  // Verify HMAC
-  const hash = crypto
-    .createHmac('sha256', SHOPIFY_API_SECRET)
-    .update(body, 'utf8')
-    .digest('base64');
+  try {
+    const hmacHeader = ctx.get('X-Shopify-Hmac-Sha256');
+    const body = ctx.request.rawBody;
     
-  if (hash !== hmacHeader) {
+    if (!hmacHeader || !body) {
+      console.log('Missing HMAC header or body');
+      ctx.status = 401;
+      ctx.body = 'Unauthorized';
+      return;
+    }
+    
+    // Verify HMAC
+    const hash = crypto
+      .createHmac('sha256', SHOPIFY_API_SECRET)
+      .update(body, 'utf8')
+      .digest('base64');
+      
+    if (hash !== hmacHeader) {
+      console.log('HMAC validation failed');
+      ctx.status = 401;
+      ctx.body = 'Unauthorized';
+      return;
+    }
+    
+    console.log('Customer data request received');
+    ctx.status = 200;
+    ctx.body = { message: 'No customer data stored' };
+  } catch (error) {
+    console.error('Webhook error:', error);
     ctx.status = 401;
-    return;
+    ctx.body = 'Unauthorized';
   }
-  
-  console.log('Customer data request received');
-  ctx.status = 200;
-  ctx.body = { message: 'No customer data stored' };
 });
 
 router.post('/webhooks/customers/redact', async (ctx) => {
-  const hmacHeader = ctx.get('X-Shopify-Hmac-Sha256');
-  const body = ctx.request.rawBody;
-  
-  const hash = crypto
-    .createHmac('sha256', SHOPIFY_API_SECRET)
-    .update(body, 'utf8')
-    .digest('base64');
+  try {
+    const hmacHeader = ctx.get('X-Shopify-Hmac-Sha256');
+    const body = ctx.request.rawBody;
     
-  if (hash !== hmacHeader) {
+    if (!hmacHeader || !body) {
+      ctx.status = 401;
+      ctx.body = 'Unauthorized';
+      return;
+    }
+    
+    const hash = crypto
+      .createHmac('sha256', SHOPIFY_API_SECRET)
+      .update(body, 'utf8')
+      .digest('base64');
+      
+    if (hash !== hmacHeader) {
+      ctx.status = 401;
+      ctx.body = 'Unauthorized';
+      return;
+    }
+    
+    console.log('Customer redact request received');
+    ctx.status = 200;
+    ctx.body = { message: 'No customer data to redact' };
+  } catch (error) {
+    console.error('Webhook error:', error);
     ctx.status = 401;
-    return;
+    ctx.body = 'Unauthorized';
   }
-  
-  console.log('Customer redact request received');
-  ctx.status = 200;
-  ctx.body = { message: 'No customer data to redact' };
 });
 
 router.post('/webhooks/shop/redact', async (ctx) => {
-  const hmacHeader = ctx.get('X-Shopify-Hmac-Sha256');
-  const body = ctx.request.rawBody;
-  
-  const hash = crypto
+  try {
+    const hmacHeader = ctx.get('X-Shopify-Hmac-Sha256');
+    const body = ctx.request.rawBody;
+    
+    if (!hmacHeader || !body) {
+      ctx.status = 401;
+      ctx.body = 'Unauthorized';
+      return;
+    }
+    
+    const hash = crypto
+      .createHmac('sha256', SHOPIFY_API_SECRET)
+      .update(body, 'utf8')
+      .digest('base64');
+      
+    if (hash !== hmacHeader) {
+      ctx.status = 401;
+      ctx.body = 'Unauthorized';
+      return;
+    }
+    
+    console.log('Shop redact request received');
+    ctx.status = 200;
+    ctx.body = { message: 'No shop data to redact' };
+  } catch (error) {
+    console.error('Webhook error:', error);
+    ctx.status = 401;
+    ctx.body = 'Unauthorized';
+  }
+});onst hash = crypto
     .createHmac('sha256', SHOPIFY_API_SECRET)
     .update(body, 'utf8')
     .digest('base64');
