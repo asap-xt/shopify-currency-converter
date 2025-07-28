@@ -1,0 +1,59 @@
+{
+  "name": "MultiCurrency Order Totals",
+  "description": "Shows order totals in BGN and EUR for Thank You and Order Status pages",
+  "category": "Order details",
+  "icon": "currency",
+  "target_areas": ["order_status", "checkout_thank_you"],
+  "settings": [
+    {
+      "type": "header",
+      "content": "Currency Display Settings"
+    },
+    {
+      "type": "select",
+      "id": "base_currency",
+      "label": "Base currency of shop",
+      "info": "Will automatically switch to EUR on 2026-01-01",
+      "default": "BGN",
+      "options": [
+        { "value": "BGN", "label": "Bulgarian Lev (BGN)" },
+        { "value": "EUR", "label": "Euro (EUR)" }
+      ]
+    },
+    {
+      "type": "text",
+      "id": "exchange_rate",
+      "label": "Exchange rate (1 EUR = X BGN)",
+      "info": "Fixed rate: 1 EUR = 1.95583 BGN",
+      "default": "1.95583"
+    },
+    {
+      "type": "header",
+      "content": "Display Options"
+    },
+    {
+      "type": "checkbox",
+      "id": "show_individual_items",
+      "label": "Show individual line items",
+      "default": true
+    },
+    {
+      "type": "checkbox", 
+      "id": "show_shipping",
+      "label": "Show shipping cost",
+      "default": true
+    },
+    {
+      "type": "checkbox",
+      "id": "show_taxes",
+      "label": "Show tax breakdown",
+      "default": true
+    },
+    {
+      "type": "checkbox",
+      "id": "show_discounts", 
+      "label": "Show discount details",
+      "default": true
+    }
+  ]
+}

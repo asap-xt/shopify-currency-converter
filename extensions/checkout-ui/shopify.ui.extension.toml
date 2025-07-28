@@ -1,0 +1,29 @@
+# extensions/checkout-ui/shopify.ui.extension.toml
+
+api_version = "2024-07"
+type = "ui_extension"
+name = "BGN EUR price display"
+handle = "eurozone-currency-display"
+
+targeting = [
+  { target = "purchase.thank-you.block.render", module = "./src/Checkout.jsx" }
+]
+
+[capabilities]
+api_access = true
+block_progress = false
+
+[settings]
+[[settings.fields]]
+key = "show_rate_info"
+type = "boolean"
+name = "Show exchange rate info"
+description = "Display the current EUR/BGN exchange rate"
+default = true
+
+[[settings.fields]]
+key = "highlight_euro_switch"
+type = "boolean" 
+name = "Highlight Euro switch date"
+description = "Show prominent notice about automatic EUR switch on 01.01.2026"
+default = true

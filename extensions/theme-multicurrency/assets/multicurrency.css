@@ -1,0 +1,10 @@
+.multicurrency-order-totals {
+  margin-top: 1em;
+  font-size: 14px;
+}
+.multicurrency-order-totals p {
+  margin: 0.5em 0;
+}
+.multicurrency-order-totals small {
+  color: #666;
+}

@@ -1,0 +1,35 @@
+# shopify.app.toml
+name = "BGN + EUR price display"
+handle = "bgn2eur-price-display"
+client_id = "eb7697b8ade02de796ed43da00f59500"
+application_url = "https://bgn2eur-price-display-production.up.railway.app"
+embedded = true
+
+[auth]
+redirect_urls = [
+  "https://bgn2eur-price-display-production.up.railway.app/auth/callback"
+]
+
+[webhooks]
+api_version = "2025-07"  # ПРОМЕНЕНО от 2024-01
+
+[pos]
+embedded = false
+
+[build]
+automatically_update_urls_on_dev = true
+dev_store_url = "https://asapxt-teststore.myshopify.com"
+include_config_on_deploy = true
+
+[access_scopes]
+scopes = "read_orders,write_themes,read_locations"
+
+[[build.extensions]]
+type = "ui_extension"
+name = "BGN EUR price display"
+handle = "eurozone-currency-display"
+
+[build.extensions.targeting]
+targets = [
+  "purchase.thank-you.block.render",
+]

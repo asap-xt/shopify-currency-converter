@@ -1,0 +1,3 @@
+name = "theme-multicurrency"
+type = "theme"
+extension_points = ["order_status"]

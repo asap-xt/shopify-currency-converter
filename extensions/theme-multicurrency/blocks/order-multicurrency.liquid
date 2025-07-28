@@ -1,0 +1,157 @@
+{% comment %}
+  MultiCurrency Order Totals block with smart date-based currency switching
+  До 01.01.2026: BGN основна, EUR втора
+  След 01.01.2026: EUR основна, BGN втора
+{% endcomment %}
+
+<link rel="stylesheet" href="{{ 'multicurrency.css' | asset_url }}">
+<script src="{{ 'multicurrency.js' | asset_url }}" defer></script>
+
+{% comment %} Настройки {% endcomment %}
+{% assign fixed_rate = 1.95583 %}
+{% assign switch_date = '2026-01-01' | date: '%s' %}
+{% assign current_date = 'now' | date: '%s' %}
+
+{% comment %} Определяме коя валута е основна спрямо датата {% endcomment %}
+{% if current_date >= switch_date %}
+  {% assign primary_currency = 'EUR' %}
+  {% assign secondary_currency = 'BGN' %}
+  {% assign primary_symbol = '€' %}
+  {% assign secondary_symbol = 'лв.' %}
+  {% assign conversion_rate = fixed_rate %}
+{% else %}
+  {% assign primary_currency = 'BGN' %}
+  {% assign secondary_currency = 'EUR' %}
+  {% assign primary_symbol = 'лв.' %}
+  {% assign secondary_symbol = '€' %}
+  {% assign conversion_rate = fixed_rate %}
+{% endif %}
+
+<div class="multicurrency-order-totals" data-primary="{{ primary_currency }}" data-secondary="{{ secondary_currency }}">
+  <div class="multicurrency-header">
+    <h3>{{ 'blocks.order-multicurrency.title' | t }}</h3>
+  </div>
+
+  <div class="line-items">
+    {% for line in order.line_items %}
+      <div class="line-item">
+        <div class="item-details">
+          <span class="quantity">{{ line.quantity }}×</span>
+          <span class="product-title">{{ line.product.title }}</span>
+          {% if line.variant.title != 'Default Title' %}
+            <span class="variant-title">- {{ line.variant.title }}</span>
+          {% endif %}
+        </div>
+        
+        <div class="price-display">
+          {% if primary_currency == 'BGN' %}
+            {% comment %} Основна в BGN, втора в EUR {% endcomment %}
+            <div class="primary-price">
+              {{ line.price | divided_by: 100.0 | round: 2 }}{{ primary_symbol }}
+            </div>
+            <div class="secondary-price">
+              ({{ line.price | divided_by: 100.0 | divided_by: conversion_rate | round: 2 }}{{ secondary_symbol }})
+            </div>
+          {% else %}
+            {% comment %} Основна в EUR, втора в BGN {% endcomment %}
+            <div class="primary-price">
+              {{ line.price | divided_by: 100.0 | divided_by: conversion_rate | round: 2 }}{{ primary_symbol }}
+            </div>
+            <div class="secondary-price">
+              ({{ line.price | divided_by: 100.0 | round: 2 }}{{ secondary_symbol }})
+            </div>
+          {% endif %}
+        </div>
+      </div>
+    {% endfor %}
+  </div>
+
+  {% comment %} Доставка {% endcomment %}
+  {% if order.total_shipping_price_set and order.total_shipping_price_set.shop_money.amount > 0 %}
+    <div class="shipping-line">
+      <span class="label">{{ 'blocks.order-multicurrency.shipping' | t }}:</span>
+      <div class="price-display">
+        {% assign shipping_amount = order.total_shipping_price_set.shop_money.amount | divided_by: 100.0 %}
+        {% if primary_currency == 'BGN' %}
+          <div class="primary-price">{{ shipping_amount | round: 2 }}{{ primary_symbol }}</div>
+          <div class="secondary-price">({{ shipping_amount | divided_by: conversion_rate | round: 2 }}{{ secondary_symbol }})</div>
+        {% else %}
+          <div class="primary-price">{{ shipping_amount | divided_by: conversion_rate | round: 2 }}{{ primary_symbol }}</div>
+          <div class="secondary-price">({{ shipping_amount | round: 2 }}{{ secondary_symbol }})</div>
+        {% endif %}
+      </div>
+    </div>
+  {% endif %}
+
+  {% comment %} Данъци {% endcomment %}
+  {% if order.total_tax_set and order.total_tax_set.shop_money.amount > 0 %}
+    <div class="tax-line">
+      <span class="label">{{ 'blocks.order-multicurrency.tax' | t }}:</span>
+      <div class="price-display">
+        {% assign tax_amount = order.total_tax_set.shop_money.amount | divided_by: 100.0 %}
+        {% if primary_currency == 'BGN' %}
+          <div class="primary-price">{{ tax_amount | round: 2 }}{{ primary_symbol }}</div>
+          <div class="secondary-price">({{ tax_amount | divided_by: conversion_rate | round: 2 }}{{ secondary_symbol }})</div>
+        {% else %}
+          <div class="primary-price">{{ tax_amount | divided_by: conversion_rate | round: 2 }}{{ primary_symbol }}</div>
+          <div class="secondary-price">({{ tax_amount | round: 2 }}{{ secondary_symbol }})</div>
+        {% endif %}
+      </div>
+    </div>
+  {% endif %}
+
+  {% comment %} Отстъпки {% endcomment %}
+  {% for discount in order.discount_applications %}
+    <div class="discount-line">
+      <span class="label">
+        {{ 'blocks.order-multicurrency.discount' | t }}
+        {% if discount.title %}({{ discount.title }}){% endif %}:
+      </span>
+      <div class="price-display discount">
+        {% assign discount_amount = discount.total_allocated_amount | divided_by: 100.0 %}
+        {% if primary_currency == 'BGN' %}
+          <div class="primary-price">-{{ discount_amount | round: 2 }}{{ primary_symbol }}</div>
+          <div class="secondary-price">(-{{ discount_amount | divided_by: conversion_rate | round: 2 }}{{ secondary_symbol }})</div>
+        {% else %}
+          <div class="primary-price">-{{ discount_amount | divided_by: conversion_rate | round: 2 }}{{ primary_symbol }}</div>
+          <div class="secondary-price">(-{{ discount_amount | round: 2 }}{{ secondary_symbol }})</div>
+        {% endif %}
+      </div>
+    </div>
+  {% endfor %}
+
+  <hr class="total-separator">
+
+  {% comment %} Обща сума {% endcomment %}
+  <div class="total-line">
+    <span class="label">
+      <strong>{{ 'blocks.order-multicurrency.total' | t }}:</strong>
+    </span>
+    <div class="price-display total">
+      {% assign total_amount = order.total_price | divided_by: 100.0 %}
+      {% if primary_currency == 'BGN' %}
+        <div class="primary-price">
+          <strong>{{ total_amount | round: 2 }}{{ primary_symbol }}</strong>
+        </div>
+        <div class="secondary-price">
+          <strong>({{ total_amount | divided_by: conversion_rate | round: 2 }}{{ secondary_symbol }})</strong>
+        </div>
+      {% else %}
+        <div class="primary-price">
+          <strong>{{ total_amount | divided_by: conversion_rate | round: 2 }}{{ primary_symbol }}</strong>
+        </div>
+        <div class="secondary-price">
+          <strong>({{ total_amount | round: 2 }}{{ secondary_symbol }})</strong>
+        </div>
+      {% endif %}
+    </div>
+  </div>
+</div>
+
+{% schema %}
+{
+  "name": "MultiCurrency Totals",
+  "target": "section",
+  "settings": []
+}
+{% endschema %}
