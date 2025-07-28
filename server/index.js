@@ -163,6 +163,18 @@ router.get('/health', async (ctx) => {
   ctx.body = 'OK';
 });
 
+// Debug route за webhooks
+router.get('/webhooks/test', async (ctx) => {
+  ctx.body = {
+    message: 'Webhook routes are registered',
+    routes: [
+      '/webhooks/customers/data_request',
+      '/webhooks/customers/redact',
+      '/webhooks/shop/redact'
+    ]
+  };
+});
+
 // Helper functions за Token Exchange подхода
 function getSessionTokenHeader(ctx) {
   return ctx.headers['authorization']?.replace('Bearer ', '');
