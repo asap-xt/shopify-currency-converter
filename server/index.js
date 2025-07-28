@@ -4,6 +4,8 @@ import '@shopify/shopify-api/adapters/node';
 import Koa from 'koa';
 import koaSession from 'koa-session';
 import Router from 'koa-router';
+import crypto from 'crypto';
+import getRawBody from 'raw-body';
 import { shopifyApi, LATEST_API_VERSION, Session } from '@shopify/shopify-api';
 
 // Environment check
@@ -71,6 +73,17 @@ const shopify = shopifyApi({
 const app = new Koa();
 app.keys = [SHOPIFY_API_SECRET];
 
+// Raw body middleware за webhooks - ВАЖНО: Трябва да е ПРЕДИ другите middleware
+app.use(async (ctx, next) => {
+  if (ctx.path.startsWith('/webhooks/')) {
+    ctx.request.rawBody = await getRawBody(ctx.req, {
+      length: ctx.request.headers['content-length'],
+      encoding: 'utf8'
+    });
+  }
+  await next();
+});
+
 // Request logging
 app.use(async (ctx, next) => {
   console.log(`${new Date().toISOString()} - ${ctx.method} ${ctx.path}`);
@@ -85,6 +98,65 @@ app.use(async (ctx, next) => {
 app.use(koaSession({ sameSite: 'none', secure: true }, app));
 
 const router = new Router();
+
+// Mandatory compliance webhooks
+router.post('/webhooks/customers/data_request', async (ctx) => {
+  const hmacHeader = ctx.get('X-Shopify-Hmac-Sha256');
+  const body = ctx.request.rawBody;
+  
+  // Verify HMAC
+  const hash = crypto
+    .createHmac('sha256', SHOPIFY_API_SECRET)
+    .update(body, 'utf8')
+    .digest('base64');
+    
+  if (hash !== hmacHeader) {
+    ctx.status = 401;
+    return;
+  }
+  
+  console.log('Customer data request received');
+  ctx.status = 200;
+  ctx.body = { message: 'No customer data stored' };
+});
+
+router.post('/webhooks/customers/redact', async (ctx) => {
+  const hmacHeader = ctx.get('X-Shopify-Hmac-Sha256');
+  const body = ctx.request.rawBody;
+  
+  const hash = crypto
+    .createHmac('sha256', SHOPIFY_API_SECRET)
+    .update(body, 'utf8')
+    .digest('base64');
+    
+  if (hash !== hmacHeader) {
+    ctx.status = 401;
+    return;
+  }
+  
+  console.log('Customer redact request received');
+  ctx.status = 200;
+  ctx.body = { message: 'No customer data to redact' };
+});
+
+router.post('/webhooks/shop/redact', async (ctx) => {
+  const hmacHeader = ctx.get('X-Shopify-Hmac-Sha256');
+  const body = ctx.request.rawBody;
+  
+  const hash = crypto
+    .createHmac('sha256', SHOPIFY_API_SECRET)
+    .update(body, 'utf8')
+    .digest('base64');
+    
+  if (hash !== hmacHeader) {
+    ctx.status = 401;
+    return;
+  }
+  
+  console.log('Shop redact request received');
+  ctx.status = 200;
+  ctx.body = { message: 'No shop data to redact' };
+});
 
 // Health check
 router.get('/health', async (ctx) => {
@@ -102,15 +174,12 @@ function getSessionTokenFromUrlParam(ctx) {
 
 function redirectToSessionTokenBouncePage(ctx) {
   const searchParams = new URLSearchParams(ctx.query);
-  // Премахваме id_token защото може да е стар
   searchParams.delete('id_token');
-  
-  // Използваме shopify-reload за автоматичен redirect
   searchParams.append('shopify-reload', `${ctx.path}?${searchParams.toString()}`);
   ctx.redirect(`/session-token-bounce?${searchParams.toString()}`);
 }
 
-// Session token bounce page - минимална HTML страница само с App Bridge
+// Session token bounce page
 router.get('/session-token-bounce', async (ctx) => {
   ctx.set('Content-Type', 'text/html');
   ctx.body = `
@@ -133,7 +202,6 @@ async function authenticateRequest(ctx, next) {
   let decodedSessionToken = null;
   
   try {
-    // Вземаме session token от header или URL
     encodedSessionToken = getSessionTokenHeader(ctx) || getSessionTokenFromUrlParam(ctx);
     
     if (!encodedSessionToken) {
@@ -150,7 +218,6 @@ async function authenticateRequest(ctx, next) {
       return;
     }
     
-    // Декодираме и валидираме session token
     decodedSessionToken = await shopify.session.decodeSessionToken(encodedSessionToken);
     console.log('Session token decoded:', { dest: decodedSessionToken.dest, iss: decodedSessionToken.iss });
     
@@ -169,11 +236,9 @@ async function authenticateRequest(ctx, next) {
     return;
   }
   
-  // Извличаме shop от decoded token
   const dest = new URL(decodedSessionToken.dest);
   const shop = dest.hostname;
   
-  // Проверяваме дали имаме валидна сесия със access token
   const sessions = await memorySessionStorage.findSessionsByShop(shop);
   let session = sessions.find(s => !s.isOnline);
   
@@ -181,15 +246,14 @@ async function authenticateRequest(ctx, next) {
     console.log('No valid session with access token, performing token exchange...');
     
     try {
-      // Token Exchange - това е новият начин!
-      const tokenExchangeResult = await shopify.auth.tokenExchange({
-        sessionToken: encodedSessionToken,
-        requestedTokenType: 'offline_access_token',
-      });
+  const tokenExchangeResult = await shopify.auth.tokenExchange({
+    shop: shop,  // ДОБАВЕТЕ ТОВА
+    sessionToken: encodedSessionToken,
+    requestedTokenType: 'offline_access_token',
+  });
       
       console.log('Token exchange successful');
       
-      // Създаваме/обновяваме сесията с новия access token
       const sessionId = `${shop}_offline`;
       session = new Session({
         id: sessionId,
@@ -210,14 +274,13 @@ async function authenticateRequest(ctx, next) {
     }
   }
   
-  // Добавяме shop и session към context
   ctx.state.shop = shop;
   ctx.state.session = session;
   
   await next();
 }
 
-// API endpoints - всички използват authenticateRequest middleware
+// API endpoints
 router.get('/api/test', authenticateRequest, async (ctx) => {
   console.log('=== API TEST ===');
   ctx.body = { 
@@ -286,7 +349,7 @@ router.get('/api/orders', authenticateRequest, async (ctx) => {
   }
 });
 
-// Main app route - НЕ изисква предварителна автентикация
+// Main app route
 router.get('(/)', async (ctx) => {
   console.log('=== MAIN ROUTE ===');
   const shop = ctx.query.shop;
@@ -298,12 +361,7 @@ router.get('(/)', async (ctx) => {
     return;
   }
   
-  // При Shopify managed install, приложението се инсталира автоматично
-  // и ние получаваме session token в URL или ще го получим през App Bridge
-  
   ctx.set('Content-Type', 'text/html');
-  // Заменете съществуващия HTML в main route (около ред 290) с този:
-
   ctx.body = `
 <!DOCTYPE html>
 <html>
@@ -466,32 +524,6 @@ router.get('(/)', async (ctx) => {
       font-family: monospace;
       font-size: 14px;
     }
-    .debug-section {
-      background: #f9fafb;
-      border: 1px solid #e1e3e5;
-      border-radius: 6px;
-      padding: 16px;
-      margin-top: 20px;
-    }
-    .debug-links {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 8px;
-      margin-top: 12px;
-    }
-    .debug-links a {
-      font-size: 12px;
-      color: #2c6ecb;
-      text-decoration: none;
-      padding: 4px 8px;
-      background: white;
-      border: 1px solid #e1e3e5;
-      border-radius: 4px;
-      cursor: pointer;
-    }
-    .debug-links a:hover {
-      background: #f3f4f6;
-    }
     .loading {
       text-align: center;
       padding: 40px;
@@ -569,7 +601,7 @@ router.get('(/)', async (ctx) => {
       <div class="warning">
         <div class="warning-icon">⚠️</div>
         <div>
-          <strong>Важно:</strong>  В настройките на магазина трябва да имате България като отделен пазар. Цените в BGN/EUR се показват само за поръчки в български лева (BGN) с адрес на доставка в България.
+          <strong>Важно:</strong> В настройките на магазина трябва да имате България като отделен пазар. Цените в BGN/EUR се показват само за поръчки в български лева (BGN) с адрес на доставка в България.
         </div>
       </div>
     </div>
@@ -603,22 +635,6 @@ router.get('(/)', async (ctx) => {
       </ul>
     </div>
 
-    <!--
-    <div class="debug-section">
-      <strong>🔧 Debug Tools</strong>
-      <div class="debug-links">
-        <a onclick="testAPI('/api/test?shop=${shop}')">Test Session</a>
-        <a onclick="testAPI('/api/shop?shop=${shop}')">Shop Info</a>
-        <a onclick="testAPI('/api/orders?shop=${shop}')">Orders API</a>
-        <a href="/debug" target="_blank">Debug Info</a>
-        <a href="/health" target="_blank">Health Check</a>
-      </div>
-      <div id="debug-output" style="margin-top: 12px; display: none;">
-        <pre style="background: white; padding: 12px; border-radius: 4px; font-size: 12px; overflow-x: auto;"></pre>
-      </div>
-    </div>
-    -->
-
     <div class="footer">
       <p>BGN/EUR Prices Display v1.0 • Създадено за български онлайн магазини</p>
       <p style="margin-top: 8px;">Нужда от помощ? Свържете се с нас на emarketingbg@gmail.com</p>
@@ -626,7 +642,6 @@ router.get('(/)', async (ctx) => {
   </div>
   
   <script>
-    // App Bridge автоматично добавя session token към всички fetch requests
     async function loadAppData() {
       try {
         const response = await fetch('/api/shop?shop=${shop}');
@@ -639,72 +654,3 @@ router.get('(/)', async (ctx) => {
           console.error('Failed to load shop data');
           document.getElementById('loading').innerHTML = 'Грешка при зареждане';
         }
-      } catch (error) {
-        console.error('Error loading app data:', error);
-        document.getElementById('loading').innerHTML = 'Грешка при зареждане';
-      }
-    }
-    
-    // Debug функция за тестване на API endpoints
-    async function testAPI(endpoint) {
-      const outputEl = document.getElementById('debug-output');
-      const preEl = outputEl.querySelector('pre');
-      
-      outputEl.style.display = 'block';
-      preEl.textContent = 'Loading...';
-      
-      try {
-        const response = await fetch(endpoint);
-        const data = await response.json();
-        preEl.textContent = JSON.stringify(data, null, 2);
-      } catch (error) {
-        preEl.textContent = 'Error: ' + error.message;
-      }
-    }
-    
-    // Изчакваме App Bridge да се инициализира
-    setTimeout(loadAppData, 1000);
-  </script>
-</body>
-</html>
-  `;
-});
-
-// Debug route
-router.get('/debug', async (ctx) => {
-  const allSessions = [];
-  for (const [id, session] of memorySessionStorage.storage) {
-    allSessions.push({
-      id: id,
-      shop: session.shop,
-      isOnline: session.isOnline,
-      hasToken: !!session.accessToken && session.accessToken !== 'placeholder'
-    });
-  }
-  
-  ctx.body = {
-    message: 'Debug info',
-    timestamp: new Date().toISOString(),
-    environment: {
-      nodeVersion: process.version,
-      hasShopifyKey: !!SHOPIFY_API_KEY,
-      scopes: SCOPES,
-      host: HOST
-    },
-    sessions: allSessions
-  };
-});
-
-app.use(router.routes());
-app.use(router.allowedMethods());
-
-const PORT = process.env.PORT || 3000;
-
-app.listen(PORT, '0.0.0.0', function() {
-  console.log(`✓ Server listening on port ${PORT}`);
-  console.log(`✓ Using Token Exchange authentication (Shopify managed install)`);
-  console.log(`✓ App URL: ${HOST}`);
-}).on('error', (err) => {
-  console.error('FATAL: Server failed to start:', err);
-  process.exit(1);
-});
