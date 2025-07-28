@@ -458,6 +458,84 @@ router.get('(/)', async (ctx) => {
       align-items: center;
       gap: 8px;
     }
+    .tabs {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 24px;
+      border-bottom: 2px solid #e1e3e5;
+      background: white;
+      border-radius: 8px 8px 0 0;
+      padding: 16px 16px 0 16px;
+    }
+    .tab {
+      padding: 12px 24px;
+      background: none;
+      border: none;
+      font-size: 16px;
+      font-weight: 500;
+      color: #616161;
+      cursor: pointer;
+      border-radius: 8px 8px 0 0;
+      transition: all 0.2s;
+      position: relative;
+    }
+    .tab:hover {
+      background: #f3f4f6;
+      color: #202223;
+    }
+    .tab.active {
+      color: #008060;
+      background: #f0fdf4;
+    }
+    .tab.active::after {
+      content: '';
+      position: absolute;
+      bottom: -2px;
+      left: 0;
+      right: 0;
+      height: 2px;
+      background: #008060;
+    }
+    .tab-content {
+      display: none;
+      animation: fadeIn 0.3s;
+    }
+    .tab-content.active {
+      display: block;
+    }
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(10px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    .quick-action {
+      background: #f0fdf4;
+      border: 2px solid #008060;
+      border-radius: 8px;
+      padding: 24px;
+      text-align: center;
+      margin-bottom: 24px;
+    }
+    .quick-action h3 {
+      margin: 0 0 16px 0;
+      color: #008060;
+    }
+    .big-button {
+      display: inline-block;
+      padding: 16px 32px;
+      background: #008060;
+      color: white;
+      text-decoration: none;
+      border-radius: 8px;
+      font-weight: 600;
+      font-size: 18px;
+      transition: all 0.2s;
+      box-shadow: 0 4px 6px rgba(0, 96, 96, 0.1);
+    }
+    .big-button:hover {
+      background: #006e52;
+      transform: translateY(-2px);
+      box-shadow: 0 6px 12px rgba(0, 96, 96, 0.15);
+    }
     .steps {
       counter-reset: step-counter;
       list-style: none;
@@ -591,89 +669,108 @@ router.get('(/)', async (ctx) => {
       <span id="status-badge" style="display: none;" class="success-badge">✓ Активно</span>
     </div>
 
-    <div class="card">
-      <h2>📋 Инструкции за инсталация</h2>
-      <ol class="steps">
-        <li>
-          <strong>Отидете в Theme Customizer</strong><br>
-          <span style="color: #616161;">Online Store → Themes → Customize</span>
-        </li>
-        <li>
-          <strong>Навигирайте до Thank You страницата</strong><br>
-          <span style="color: #616161;">Settings → Checkout → Thank you page</span>
-        </li>
-        <li>
-          <strong>Добавете приложението</strong><br>
-          <span style="color: #616161;">Add block → Apps → BGN EUR Price Display</span>
-        </li>
-        <li>
-          <strong>Запазете промените</strong><br>
-          <span style="color: #616161;">Кликнете Save в горния десен ъгъл</span>
-        </li>
-      </ol>
+    <div class="quick-action">
+      <h3>🚀 Бърз старт</h3>
+      <p style="margin-bottom: 20px;">Инсталирайте extension-а с едно кликване:</p>
+      <a href="https://${shop}/admin/themes/current/editor?context=checkout&template=checkout" 
+         class="big-button" 
+         target="_blank">
+        🎨 Отвори Theme Editor
+      </a>
+    </div>
+
+    <div class="tabs">
+      <button class="tab active" onclick="showTab('installation')">📋 Инсталация</button>
+      <button class="tab" onclick="showTab('features')">🎯 Функции</button>
+      <button class="tab" onclick="showTab('upcoming')">🚀 Предстоящи</button>
+      <button class="tab" onclick="showTab('tips')">💡 Съвети</button>
     </div>
 
     <div class="card">
-      <h2>🎯 Как работи</h2>
-      <div class="feature-grid">
-        <div class="feature">
-          <div class="feature-icon">💰</div>
-          <div class="feature-text">
-            <h3>Двойно показване</h3>
-            <p>Всички цени се показват едновременно в BGN и EUR</p>
+      <div id="installation" class="tab-content active">
+        <h2>📋 Инструкции за инсталация</h2>
+        <ol class="steps">
+          <li>
+            <strong>Отидете в Theme Customizer</strong><br>
+            <span style="color: #616161;">Online Store → Themes → Customize</span>
+          </li>
+          <li>
+            <strong>Навигирайте до Thank You страницата</strong><br>
+            <span style="color: #616161;">Settings → Checkout → Thank you page</span>
+          </li>
+          <li>
+            <strong>Добавете приложението</strong><br>
+            <span style="color: #616161;">Add block → Apps → BGN EUR Price Display</span>
+          </li>
+          <li>
+            <strong>Запазете промените</strong><br>
+            <span style="color: #616161;">Кликнете Save в горния десен ъгъл</span>
+          </li>
+        </ol>
+      </div>
+
+      <div id="features" class="tab-content">
+        <h2>🎯 Как работи</h2>
+        <div class="feature-grid">
+          <div class="feature">
+            <div class="feature-icon">💰</div>
+            <div class="feature-text">
+              <h3>Двойно показване</h3>
+              <p>Всички цени се показват едновременно в BGN и EUR</p>
+            </div>
+          </div>
+          <div class="feature">
+            <div class="feature-icon">🔢</div>
+            <div class="feature-text">
+              <h3>Фиксиран курс</h3>
+              <p>1 EUR = 1.95583 BGN</p>
+            </div>
+          </div>
+          <div class="feature">
+            <div class="feature-icon">📦</div>
+            <div class="feature-text">
+              <h3>Пълна разбивка</h3>
+              <p>Продукти, доставка и обща сума</p>
+            </div>
           </div>
         </div>
-        <div class="feature">
-          <div class="feature-icon">🔢</div>
-          <div class="feature-text">
-            <h3>Фиксиран курс</h3>
-            <p>1 EUR = 1.95583 BGN</p>
-          </div>
-        </div>
-        <div class="feature">
-          <div class="feature-icon">📦</div>
-          <div class="feature-text">
-            <h3>Пълна разбивка</h3>
-            <p>Продукти, доставка и обща сума</p>
+        
+        <div class="warning">
+          <div class="warning-icon">⚠️</div>
+          <div>
+            <strong>Важно:</strong> В настройките на магазина трябва да имате България като отделен пазар. Цените в BGN/EUR се показват само за поръчки в български лева (BGN) с адрес на доставка в България.
           </div>
         </div>
       </div>
-      
-      <div class="warning">
-        <div class="warning-icon">⚠️</div>
+
+      <div id="upcoming" class="tab-content">
+        <h2>🚀 Предстоящи функции</h2>
+        <div style="margin-bottom: 16px;">
+          <span class="badge new">СКОРО</span>
+          <strong>Order Status Page</strong>
+          <p style="margin: 8px 0 0 0; color: #616161;">
+            Разширяваме функционалността и към страницата за статус на поръчката, където клиентите ще виждат същата информация за валутите.
+          </p>
+        </div>
+        
         <div>
-          <strong>Важно:</strong> В настройките на магазина трябва да имате България като отделен пазар. Цените в BGN/EUR се показват само за поръчки в български лева (BGN) с адрес на доставка в България.
+          <span class="badge">ПЛАНИРАНО</span>
+          <strong>Автоматично преминаване към EUR</strong>
+          <p style="margin: 8px 0 0 0; color: #616161;">
+            След 01.01.2026 г. приложението автоматично ще превключи да показва EUR като основна валута и BGN като референтна, в съответствие с приемането на еврото в България.
+          </p>
         </div>
       </div>
-    </div>
 
-    <div class="card">
-      <h2>🚀 Предстоящи функции</h2>
-      <div style="margin-bottom: 16px;">
-        <span class="badge new">СКОРО</span>
-        <strong>Order Status Page</strong>
-        <p style="margin: 8px 0 0 0; color: #616161;">
-          Разширяваме функционалността и към страницата за статус на поръчката, където клиентите ще виждат същата информация за валутите.
-        </p>
+      <div id="tips" class="tab-content">
+        <h2>💡 Полезни съвети</h2>
+        <ul style="margin: 0; padding-left: 20px;">
+          <li>Уверете се, че валутата на магазина е настроена на BGN</li>
+          <li>Тествайте с реална поръчка за да видите как изглежда</li>
+          <li>При проблеми, опитайте да деинсталирате и инсталирате отново</li>
+          <li>Проверете дали extension-а е активен в Theme Customizer</li>
+        </ul>
       </div>
-      
-      <div>
-        <span class="badge">ПЛАНИРАНО</span>
-        <strong>Автоматично преминаване към EUR</strong>
-        <p style="margin: 8px 0 0 0; color: #616161;">
-          След 01.01.2026 г. приложението автоматично ще превключи да показва EUR като основна валута и BGN като референтна, в съответствие с приемането на еврото в България.
-        </p>
-      </div>
-    </div>
-
-    <div class="card">
-      <h2>💡 Полезни съвети</h2>
-      <ul style="margin: 0; padding-left: 20px;">
-        <li>Уверете се, че валутата на магазина е настроена на BGN</li>
-        <li>Тествайте с реална поръчка за да видите как изглежда</li>
-        <li>При проблеми, опитайте да деинсталирате и инсталирате отново</li>
-        <li>Проверете дали extension-а е активен в Theme Customizer</li>
-      </ul>
     </div>
 
     <div class="footer">
@@ -699,6 +796,20 @@ router.get('(/)', async (ctx) => {
         console.error('Error loading app data:', error);
         document.getElementById('loading').innerHTML = 'Грешка при зареждане';
       }
+    }
+    
+    function showTab(tabName) {
+      // Hide all tabs
+      document.querySelectorAll('.tab-content').forEach(content => {
+        content.classList.remove('active');
+      });
+      document.querySelectorAll('.tab').forEach(tab => {
+        tab.classList.remove('active');
+      });
+      
+      // Show selected tab
+      document.getElementById(tabName).classList.add('active');
+      event.target.classList.add('active');
     }
     
     setTimeout(loadAppData, 1000);
