@@ -103,7 +103,31 @@ const router = new Router();
 router.post('/webhooks/customers/data_request', async (ctx) => {
   const hmacHeader = ctx.get('X-Shopify-Hmac-Sha256');
   const body = ctx.request.rawBody;
-  
+ 
+router.post('/webhooks/customers/data_request', async (ctx) => {
+  const hmacHeader = ctx.get('X-Shopify-Hmac-Sha256');
+  const body       = ctx.request.rawBody;
+  const secret     = process.env.SHOPIFY_API_SECRET;
+
+  // DEBUG: see what values we're comparing
+  console.log('🔐 Secret in use:', secret);
+  console.log('🔐 Incoming HMAC:', hmacHeader);
+  console.log('🔐 Raw body:', body);
+
+  const hash = crypto
+    .createHmac('sha256', secret)
+    .update(body, 'utf8')
+    .digest('base64');
+
+  console.log('🔐 Computed HMAC:', hash);
+
+  if (hash !== hmacHeader) {
+    ctx.status = 401;
+    return;
+  }
+  …
+});
+ 
   // Verify HMAC
   const hash = crypto
     .createHmac('sha256', SHOPIFY_API_SECRET)
