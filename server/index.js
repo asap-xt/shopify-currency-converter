@@ -197,19 +197,6 @@ router.post('/webhooks/shop/redact', async (ctx) => {
     ctx.status = 401;
     ctx.body = 'Unauthorized';
   }
-});onst hash = crypto
-    .createHmac('sha256', SHOPIFY_API_SECRET)
-    .update(body, 'utf8')
-    .digest('base64');
-    
-  if (hash !== hmacHeader) {
-    ctx.status = 401;
-    return;
-  }
-  
-  console.log('Shop redact request received');
-  ctx.status = 200;
-  ctx.body = { message: 'No shop data to redact' };
 });
 
 // Health check
@@ -300,11 +287,11 @@ async function authenticateRequest(ctx, next) {
     console.log('No valid session with access token, performing token exchange...');
     
     try {
-  const tokenExchangeResult = await shopify.auth.tokenExchange({
-    shop: shop,  // ДОБАВЕТЕ ТОВА
-    sessionToken: encodedSessionToken,
-    requestedTokenType: 'offline_access_token',
-  });
+      const tokenExchangeResult = await shopify.auth.tokenExchange({
+        shop: shop,
+        sessionToken: encodedSessionToken,
+        requestedTokenType: 'offline_access_token',
+      });
       
       console.log('Token exchange successful');
       
