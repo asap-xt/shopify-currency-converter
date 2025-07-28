@@ -11,19 +11,18 @@ redirect_urls = [
 ]
 
 [webhooks]
-api_version = "2024-10"
+api_version = "2024-10"       # или по‑нова дата
 
+# Единствена подcписка за GDPR compliance
 [[webhooks.subscriptions]]
-topics = ["customers/data_request"]
-uri = "/webhooks/customers/data_request"
-
-[[webhooks.subscriptions]]
-topics = ["customers/redact"]
-uri = "/webhooks/customers/redact"
-
-[[webhooks.subscriptions]]
-topics = ["shop/redact"]
-uri = "/webhooks/shop/redact"
+# Задължителни GDPR webhooks за публични приложения
+compliance_topics = [
+  "customers/data_request",
+  "customers/redact",
+  "shop/redact"
+]
+# Вашият общ webhook endpoint
+uri = "/webhooks"
 
 [pos]
 embedded = false
