@@ -11,7 +11,7 @@ redirect_urls = [
 ]
 
 [webhooks]
-api_version = "2025-07"
+api_version = "2025-07"       # или по‑нова дата
 
 [[webhooks.subscriptions]]
 topics = ["customers/data_request"]
@@ -36,7 +36,6 @@ include_config_on_deploy = true
 [access_scopes]
 scopes = "read_orders,write_themes,read_locations"
 
-# EXISTING EXTENSION - Thank You Page
 [[build.extensions]]
 type = "ui_extension"
 name = "BGN EUR price display"
