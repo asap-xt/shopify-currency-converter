@@ -14,15 +14,15 @@ redirect_urls = [
 api_version = "2025-07"       # или по‑нова дата
 
 [[webhooks.subscriptions]]
-topics = ["customers/data_request"]
+topics = ["CUSTOMERS_DATA_REQUEST"]
 uri = "/webhooks/customers/data_request"
 
 [[webhooks.subscriptions]]
-topics = ["customers/redact"]
+topics = ["CUSTOMERS_REDACT"]
 uri = "/webhooks/customers/redact"
 
 [[webhooks.subscriptions]]
-topics = ["shop/redact"]
+topics = ["SHOP_REDACT"]
 uri = "/webhooks/shop/redact"
 
 [pos]
