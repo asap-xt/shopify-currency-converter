@@ -1,0 +1,19 @@
+# extensions/order-status-currency-display/shopify.extension.toml
+api_version = "2025-07"
+
+[[extensions]]
+type = "ui_extension"
+name = "Order Status Currency Display"
+handle = "order-status-currency-display"
+
+[[extensions.targeting]]
+target = "customer-account.order-status.block.render"
+module = "./src/OrderStatus.jsx"
+
+[extensions.capabilities]
+api_access = true
+block_progress = false
+network_access = false
+
+[extensions.settings]
+# No settings needed for now
