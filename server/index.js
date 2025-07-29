@@ -538,84 +538,83 @@ router.get('(/)', async (ctx) => {
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
       margin: 0;
       padding: 0;
-      background: #f4f6f8;
+      background: #fafafa;
       color: #202223;
     }
     .container {
-      max-width: 800px;
+      max-width: 900px;
       margin: 0 auto;
       padding: 20px;
     }
     .header {
       background: white;
-      border-radius: 12px;
-      padding: 30px;
+      border-radius: 8px;
+      padding: 40px;
       text-align: center;
-      box-shadow: 0 0 0 1px rgba(0,0,0,0.05), 0 1px 3px rgba(0,0,0,0.1);
-      margin-bottom: 20px;
+      margin-bottom: 24px;
+      border: 1px solid #e1e3e5;
     }
     .header h1 {
-      margin: 0 0 10px 0;
-      font-size: 28px;
-      font-weight: 600;
+      margin: 0 0 12px 0;
+      font-size: 32px;
+      font-weight: 500;
+      color: #202223;
     }
     .header p {
       color: #616161;
       margin: 0;
       font-size: 16px;
+      line-height: 1.5;
     }
     .card {
       background: white;
       border-radius: 8px;
-      padding: 24px;
-      margin-bottom: 16px;
-      box-shadow: 0 0 0 1px rgba(0,0,0,0.05), 0 1px 3px rgba(0,0,0,0.1);
+      padding: 32px;
+      margin-bottom: 24px;
+      border: 1px solid #e1e3e5;
     }
     .card h2 {
-      margin: 0 0 16px 0;
-      font-size: 20px;
-      font-weight: 600;
-      display: flex;
-      align-items: center;
-      gap: 8px;
+      margin: 0 0 24px 0;
+      font-size: 24px;
+      font-weight: 500;
+      color: #202223;
     }
     .tabs {
       display: flex;
-      gap: 8px;
-      margin-bottom: 24px;
-      border-bottom: 2px solid #e1e3e5;
+      gap: 32px;
+      margin-bottom: 0;
       background: white;
       border-radius: 8px 8px 0 0;
-      padding: 16px 16px 0 16px;
+      padding: 0 32px;
+      border: 1px solid #e1e3e5;
+      border-bottom: none;
     }
     .tab {
-      padding: 12px 24px;
+      padding: 20px 0;
       background: none;
       border: none;
-      font-size: 16px;
-      font-weight: 500;
+      font-size: 15px;
+      font-weight: 400;
       color: #616161;
       cursor: pointer;
-      border-radius: 8px 8px 0 0;
-      transition: all 0.2s;
       position: relative;
+      transition: color 0.2s;
     }
     .tab:hover {
-      background: #f3f4f6;
       color: #202223;
     }
     .tab.active {
-      color: #008060;
-      background: #f0fdf4;
+      color: #202223;
+      font-weight: 500;
     }
     .tab.active::after {
       content: '';
       position: absolute;
-      bottom: -2px;
+      bottom: 0;
       left: 0;
       right: 0;
       height: 2px;
-      background: #008060;
+      background: #202223;
     }
     .tab-content {
       display: none;
@@ -625,37 +624,37 @@ router.get('(/)', async (ctx) => {
       display: block;
     }
     @keyframes fadeIn {
-      from { opacity: 0; transform: translateY(10px); }
-      to { opacity: 1; transform: translateY(0); }
+      from { opacity: 0; }
+      to { opacity: 1; }
     }
     .quick-action {
-      background: #f0fdf4;
-      border: 2px solid #008060;
+      background: white;
+      border: 1px solid #e1e3e5;
       border-radius: 8px;
-      padding: 24px;
+      padding: 32px;
       text-align: center;
       margin-bottom: 24px;
     }
     .quick-action h3 {
-      margin: 0 0 16px 0;
-      color: #008060;
+      margin: 0 0 12px 0;
+      font-size: 20px;
+      font-weight: 500;
+      color: #202223;
     }
     .big-button {
       display: inline-block;
-      padding: 16px 32px;
-      background: #008060;
+      padding: 12px 24px;
+      background: #202223;
       color: white;
       text-decoration: none;
-      border-radius: 8px;
-      font-weight: 600;
-      font-size: 18px;
+      border-radius: 6px;
+      font-weight: 500;
+      font-size: 15px;
       transition: all 0.2s;
-      box-shadow: 0 4px 6px rgba(0, 96, 96, 0.1);
     }
     .big-button:hover {
-      background: #006e52;
-      transform: translateY(-2px);
-      box-shadow: 0 6px 12px rgba(0, 96, 96, 0.15);
+      background: #000;
+      transform: translateY(-1px);
     }
     .steps {
       counter-reset: step-counter;
@@ -664,83 +663,80 @@ router.get('(/)', async (ctx) => {
       margin: 0;
     }
     .steps li {
-      margin-bottom: 16px;
-      padding-left: 40px;
+      margin-bottom: 20px;
+      padding-left: 48px;
       position: relative;
       counter-increment: step-counter;
+      line-height: 1.6;
     }
     .steps li::before {
       content: counter(step-counter);
       position: absolute;
       left: 0;
-      top: 0;
-      width: 28px;
-      height: 28px;
-      background: #008060;
-      color: white;
+      top: 2px;
+      width: 32px;
+      height: 32px;
+      background: #f3f4f6;
+      color: #202223;
       border-radius: 50%;
       display: flex;
       align-items: center;
       justify-content: center;
-      font-weight: 600;
+      font-weight: 500;
       font-size: 14px;
     }
     .feature-grid {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-      gap: 16px;
-      margin-top: 16px;
+      grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+      gap: 24px;
+      margin-top: 24px;
     }
     .feature {
-      display: flex;
-      align-items: flex-start;
-      gap: 12px;
+      padding: 20px 0;
+      border-bottom: 1px solid #f3f4f6;
     }
-    .feature-icon {
-      font-size: 24px;
-      line-height: 1;
+    .feature:last-child {
+      border-bottom: none;
     }
     .feature-text h3 {
-      margin: 0 0 4px 0;
+      margin: 0 0 8px 0;
       font-size: 16px;
-      font-weight: 600;
+      font-weight: 500;
+      color: #202223;
     }
     .feature-text p {
       margin: 0;
       color: #616161;
       font-size: 14px;
+      line-height: 1.5;
     }
     .badge {
       display: inline-block;
       padding: 4px 12px;
       background: #f3f4f6;
-      border-radius: 20px;
+      border-radius: 4px;
       font-size: 12px;
       font-weight: 500;
-      margin-right: 8px;
+      color: #616161;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
     }
     .badge.new {
-      background: #e3f5ff;
-      color: #004c99;
+      background: #202223;
+      color: white;
     }
     .warning {
-      background: #fff4e5;
-      border: 1px solid #ffea8a;
-      border-radius: 8px;
-      padding: 16px;
-      margin: 16px 0;
-      display: flex;
-      align-items: flex-start;
-      gap: 12px;
-    }
-    .warning-icon {
-      font-size: 20px;
-      line-height: 1;
+      background: #f9fafb;
+      border: 1px solid #e1e3e5;
+      border-radius: 6px;
+      padding: 20px;
+      margin: 24px 0;
+      line-height: 1.6;
     }
     .button {
       display: inline-block;
       padding: 10px 20px;
-      background: #008060;
+      background: #202223;
       color: white;
       text-decoration: none;
       border-radius: 6px;
@@ -749,13 +745,14 @@ router.get('(/)', async (ctx) => {
       transition: background 0.2s;
     }
     .button:hover {
-      background: #006e52;
+      background: #000;
     }
     .footer {
       text-align: center;
       color: #616161;
       font-size: 14px;
       margin-top: 40px;
+      line-height: 1.6;
     }
     code {
       background: #f3f4f6;
@@ -772,44 +769,51 @@ router.get('(/)', async (ctx) => {
     }
     .success-badge {
       display: inline-block;
-      background: #008060;
+      background: #108043;
       color: white;
-      padding: 4px 8px;
+      padding: 4px 12px;
       border-radius: 4px;
       font-size: 12px;
       margin-left: 8px;
+    }
+    ul {
+      line-height: 1.8;
+    }
+    strong {
+      font-weight: 500;
+      color: #202223;
     }
   </style>
 </head>
 <body>
   <div class="container">
     <div class="header">
-      <h1>🇧🇬 BGN/EUR Price Display 🇪🇺</h1>
+      <h1>BGN/EUR Price Display</h1>
       <p>Показвайте цените в лева и евро на Thank You страницата</p>
       <div class="loading" id="loading">Зареждане...</div>
       <span id="status-badge" style="display: none;" class="success-badge">✓ Активно</span>
     </div>
 
     <div class="quick-action">
-      <h3>🚀 Бърз старт</h3>
+      <h3>Бърз старт</h3>
       <p style="margin-bottom: 20px;">Инсталирайте extension-а с едно кликване:</p>
       <a href="https://${shop}/admin/themes/current/editor?context=checkout&template=checkout" 
          class="big-button" 
          target="_blank">
-        🎨 Отвори Theme Editor
+        Отвори Theme Editor
       </a>
     </div>
 
     <div class="tabs">
-      <button class="tab active" onclick="showTab('installation')">📋 Инсталация</button>
-      <button class="tab" onclick="showTab('features')">🎯 Функции</button>
-      <button class="tab" onclick="showTab('upcoming')">🚀 Предстоящи</button>
-      <button class="tab" onclick="showTab('tips')">💡 Съвети</button>
+      <button class="tab active" onclick="showTab('installation')">Инсталация</button>
+      <button class="tab" onclick="showTab('features')">Функции</button>
+      <button class="tab" onclick="showTab('upcoming')">Предстоящи</button>
+      <button class="tab" onclick="showTab('tips')">Съвети</button>
     </div>
 
     <div class="card">
       <div id="installation" class="tab-content active">
-        <h2>📋 Инструкции за инсталация</h2>
+        <h2>Инструкции за инсталация</h2>
         <ol class="steps">
           <li>
             <strong>Отидете в Theme Customizer</strong><br>
@@ -831,24 +835,21 @@ router.get('(/)', async (ctx) => {
       </div>
 
       <div id="features" class="tab-content">
-        <h2>🎯 Как работи</h2>
+        <h2>Как работи</h2>
         <div class="feature-grid">
           <div class="feature">
-            <div class="feature-icon">💰</div>
             <div class="feature-text">
               <h3>Двойно показване</h3>
               <p>Всички цени се показват едновременно в BGN и EUR</p>
             </div>
           </div>
           <div class="feature">
-            <div class="feature-icon">🔢</div>
             <div class="feature-text">
               <h3>Фиксиран курс</h3>
               <p>1 EUR = 1.95583 BGN</p>
             </div>
           </div>
           <div class="feature">
-            <div class="feature-icon">📦</div>
             <div class="feature-text">
               <h3>Пълна разбивка</h3>
               <p>Продукти, доставка и обща сума</p>
@@ -857,7 +858,6 @@ router.get('(/)', async (ctx) => {
         </div>
         
         <div class="warning">
-          <div class="warning-icon">⚠️</div>
           <div>
             <strong>Важно:</strong> В настройките на магазина трябва да имате България като отделен пазар. Цените в BGN/EUR се показват само за поръчки в български лева (BGN) с адрес на доставка в България.
           </div>
@@ -865,7 +865,7 @@ router.get('(/)', async (ctx) => {
       </div>
 
       <div id="upcoming" class="tab-content">
-        <h2>🚀 Предстоящи функции</h2>
+        <h2>Предстоящи функции</h2>
         <div style="margin-bottom: 16px;">
           <span class="badge new">СКОРО</span>
           <strong>Order Status Page</strong>
@@ -884,7 +884,7 @@ router.get('(/)', async (ctx) => {
       </div>
 
       <div id="tips" class="tab-content">
-        <h2>💡 Полезни съвети</h2>
+        <h2>Полезни съвети</h2>
         <ul style="margin: 0; padding-left: 20px;">
           <li>Уверете се, че валутата на магазина е настроена на BGN</li>
           <li>Тествайте с реална поръчка за да видите как изглежда</li>
