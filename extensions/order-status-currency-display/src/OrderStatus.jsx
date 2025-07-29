@@ -10,12 +10,14 @@ import {
   Divider,
   useLocalizationCountry,
   useLocalizationMarket,
-  useOrder
+  useOrder,
+  useTotalAmount,
+  useOrderLineItems
 } from '@shopify/ui-extensions-react/customer-account';
 
 const EUR_TO_BGN_RATE = 1.95583;
 
-// Функции за конвертиране
+// Функции за конвертиране - СЪЩИТЕ КАТО В Checkout.jsx
 const convertBGNtoEUR = (bgnAmount) => {
   return (parseFloat(bgnAmount) / EUR_TO_BGN_RATE).toFixed(2);
 };
@@ -30,16 +32,13 @@ export default reactExtension(
 );
 
 function OrderStatusExtension() {
-  const api = useApi();
   const country = useLocalizationCountry();
   const market = useLocalizationMarket();
   
-  // Опитваме useOrder hook директно
-  const orderFromHook = useOrder();
-  
-  const [orderData, setOrderData] = React.useState(null);
-  const [loading, setLoading] = React.useState(true);
-  const [debugInfo, setDebugInfo] = React.useState({});
+  // Използваме hooks за order данни
+  const order = useOrder();
+  const totalAmount = useTotalAmount();
+  const lineItems = useOrderLineItems();
   
   // ПРОВЕРКА - показваме САМО за България
   const isBulgaria = country?.isoCode === 'BG' || 
@@ -50,148 +49,62 @@ function OrderStatusExtension() {
     return null;
   }
   
-  React.useEffect(() => {
-    // Debug информация
-    const debug = {
-      api: !!api,
-      apiOrderStatus: api?.orderStatus,
-      apiOrder: api?.order,
-      orderFromHook: orderFromHook,
-      url: window.location.href
-    };
-    
-    console.log('🔍 Debug info:', debug);
-    setDebugInfo(debug);
-    
-    // Ако имаме данни от hook-а, използваме ги директно
-    if (orderFromHook && orderFromHook.totalPrice) {
-      console.log('✅ Using order data from hook');
-      setOrderData(orderFromHook);
-      setLoading(false);
-      return;
-    }
-    
-    // Иначе се опитваме да вземем order ID и да направим query
-    const fetchOrderData = async () => {
-      try {
-        // Различни опити за order ID
-        let orderId = null;
-        
-        // Опит 1: от api.orderStatus
-        if (api?.orderStatus?.order?.id) {
-          orderId = api.orderStatus.order.id;
-        }
-        // Опит 2: от api.order
-        else if (api?.order?.id) {
-          orderId = api.order.id;
-        }
-        // Опит 3: от URL
-        else if (window.location.pathname.includes('/orders/')) {
-          const match = window.location.pathname.match(/orders\/(\d+)/);
-          if (match) {
-            orderId = `gid://shopify/Order/${match[1]}`;
-          }
-        }
-        
-        console.log('Order ID attempts:', orderId);
-        
-        if (!orderId) {
-          console.log('❌ No order ID found');
-          setLoading(false);
-          return;
-        }
-        
-        // Опростена GraphQL заявка
-        const query = `
-          query getOrder($id: ID!) {
-            order(id: $id) {
-              id
-              currencyCode
-              totalPrice {
-                amount
-                currencyCode
-              }
-              lineItems(first: 10) {
-                nodes {
-                  title
-                  quantity
-                  totalPrice {
-                    amount
-                  }
-                }
-              }
-            }
-          }
-        `;
-        
-        const response = await api.query(query, {
-          variables: { id: orderId }
-        });
-        
-        console.log('GraphQL response:', response);
-        
-        if (response?.data?.order) {
-          setOrderData(response.data.order);
-        }
-      } catch (error) {
-        console.error('❌ Error fetching order:', error);
-      } finally {
-        setLoading(false);
-      }
-    };
-    
-    fetchOrderData();
-  }, [api, orderFromHook]);
-  
-  // Показваме debug информация
-  if (!loading && !orderData) {
-    return (
-      <View padding="base" border="base" background="subdued">
-        <BlockStack spacing="base">
-          <Text size="medium" emphasis="bold">
-            🔍 Debug Mode - Order Status Extension
-          </Text>
-          <Text size="small">
-            Debug info: {JSON.stringify(debugInfo, null, 2)}
-          </Text>
-          <Text size="small" subdued>
-            Проверете console за повече информация
-          </Text>
-        </BlockStack>
-      </View>
-    );
-  }
-  
-  if (loading) {
-    return (
-      <View padding="base" border="base" background="subdued">
-        <Text>Зареждане...</Text>
-      </View>
-    );
-  }
-  
-  if (!orderData) {
+  // Ако няма данни за поръчката
+  if (!order || !totalAmount) {
     return null;
   }
   
-  // Извличаме данните
-  const currency = orderData.currencyCode || orderData.totalPrice?.currencyCode || 'BGN';
+  const currency = totalAmount.currencyCode || 'BGN';
   const isBGN = currency === 'BGN';
-  
-  // Опитваме различни пътища за total
-  const totalAmount = 
-    parseFloat(orderData.totalPrice?.amount) || 
-    parseFloat(orderData.totalPriceSet?.shopMoney?.amount) || 
-    0;
-  
-  const lines = orderData.lineItems?.nodes || orderData.lineItems?.edges?.map(e => e.node) || [];
+  const total = totalAmount.amount || 0;
   
   return (
     <View padding="base" border="base" background="subdued">
       <BlockStack spacing="base">
+        {/* Заглавие с флагове - същото като в Checkout.jsx */}
         <Text size="medium" emphasis="bold">
           🇧🇬 Твоята поръчка 🇪🇺
         </Text>
+        
+        {/* Продукти ако имаме lineItems */}
+        {lineItems && lineItems.length > 0 && (
+          <View padding="base" background="base" cornerRadius="base">
+            <BlockStack spacing="base">
+              <Text size="small" emphasis="bold">
+                Продукти:
+              </Text>
+              
+              <BlockStack spacing="tight">
+                {lineItems.map((item, index) => {
+                  const lineAmount = item.totalAmount?.amount || 0;
+                  
+                  const displayPrice = isBGN
+                    ? `${lineAmount.toFixed(2)} ЛВ / ${convertBGNtoEUR(lineAmount)} EUR`
+                    : `${lineAmount.toFixed(2)} EUR / ${convertEURtoBGN(lineAmount)} ЛВ`;
+
+                  return (
+                    <InlineLayout
+                      key={index}
+                      spacing="base"
+                      blockAlignment="center"
+                    >
+                      <View inlineAlignment="start" minInlineSize="fill">
+                        <Text size="small">
+                          {item.quantity}× {item.title || item.name}
+                        </Text>
+                      </View>
+                      <View inlineAlignment="end">
+                        <Text size="small" emphasis="bold">
+                          {displayPrice}
+                        </Text>
+                      </View>
+                    </InlineLayout>
+                  );
+                })}
+              </BlockStack>
+            </BlockStack>
+          </View>
+        )}
         
         {/* Обща сума */}
         <View padding="tight" background="interactive" cornerRadius="base">
@@ -202,8 +115,8 @@ function OrderStatusExtension() {
             <View inlineAlignment="end">
               <Text size="large" emphasis="bold">
                 {isBGN
-                  ? `${totalAmount.toFixed(2)} ЛВ / ${convertBGNtoEUR(totalAmount)} EUR`
-                  : `${totalAmount.toFixed(2)} EUR / ${convertEURtoBGN(totalAmount)} ЛВ`
+                  ? `${total.toFixed(2)} ЛВ / ${convertBGNtoEUR(total)} EUR`
+                  : `${total.toFixed(2)} EUR / ${convertEURtoBGN(total)} ЛВ`
                 }
               </Text>
             </View>
