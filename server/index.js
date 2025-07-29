@@ -807,7 +807,6 @@ router.get('(/)', async (ctx) => {
     <div class="tabs">
       <button class="tab active" onclick="showTab('installation')">Инсталация</button>
       <button class="tab" onclick="showTab('features')">Функции</button>
-      <button class="tab" onclick="showTab('upcoming')">Предстоящи</button>
       <button class="tab" onclick="showTab('tips')">Съвети</button>
     </div>
 
@@ -845,8 +844,8 @@ router.get('(/)', async (ctx) => {
           </div>
           <div class="feature">
             <div class="feature-text">
-              <h3>Фиксиран курс</h3>
-              <p>1 EUR = 1.95583 BGN</p>
+              <h3>Автоматично преминаване към EUR</h3>
+              <p>След 01.01.2026 г. когато смените валутата на магазина (или на пазара България)  на евро, приложението автоматично ще превключи да показва EUR като основна валута и BGN като референтна.</p>
             </div>
           </div>
           <div class="feature">
@@ -855,31 +854,18 @@ router.get('(/)', async (ctx) => {
               <p>Продукти, доставка и обща сума</p>
             </div>
           </div>
+          <div class="feature">
+            <div class="feature-text">
+              <h3>Фиксиран курс</h3>
+              <p>1 EUR = 1.95583 BGN</p>
+            </div>
+          </div>
         </div>
         
         <div class="warning">
           <div>
             <strong>Важно:</strong> В настройките на магазина трябва да имате България като отделен пазар. Цените в BGN/EUR се показват само за поръчки в български лева (BGN) с адрес на доставка в България.
           </div>
-        </div>
-      </div>
-
-      <div id="upcoming" class="tab-content">
-        <h2>Предстоящи функции</h2>
-        <div style="margin-bottom: 16px;">
-          <span class="badge new">СКОРО</span>
-          <strong>Order Status Page</strong>
-          <p style="margin: 8px 0 0 0; color: #616161;">
-            Разширяваме функционалността и към страницата за статус на поръчката, където клиентите ще виждат същата информация за валутите.
-          </p>
-        </div>
-        
-        <div>
-          <span class="badge">ПЛАНИРАНО</span>
-          <strong>Автоматично преминаване към EUR</strong>
-          <p style="margin: 8px 0 0 0; color: #616161;">
-            След 01.01.2026 г. приложението автоматично ще превключи да показва EUR като основна валута и BGN като референтна, в съответствие с приемането на еврото в България.
-          </p>
         </div>
       </div>
 
