@@ -11,19 +11,7 @@ redirect_urls = [
 ]
 
 [webhooks]
-api_version = "2025-07"       # или по‑нова дата
-
-[[webhooks.subscriptions]]
-topics = ["CUSTOMERS_DATA_REQUEST"]
-uri = "/webhooks/customers/data_request"
-
-[[webhooks.subscriptions]]
-topics = ["CUSTOMERS_REDACT"]
-uri = "/webhooks/customers/redact"
-
-[[webhooks.subscriptions]]
-topics = ["SHOP_REDACT"]
-uri = "/webhooks/shop/redact"
+api_version = "2025-07"
 
 [pos]
 embedded = false
