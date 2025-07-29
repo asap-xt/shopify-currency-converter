@@ -9,8 +9,7 @@ import {
   Divider,
   useLocalizationCountry,
   useLocalizationMarket,
-  useSettings,
-  useExtensionApi
+  useOrder  // ВАЖНО - този hook дава достъп до order данните
 } from '@shopify/ui-extensions-react/customer-account';
 
 const EUR_TO_BGN_RATE = 1.95583;
@@ -32,70 +31,115 @@ export default reactExtension(
 function OrderStatusExtension() {
   const country = useLocalizationCountry();
   const market = useLocalizationMarket();
-  const settings = useSettings();
-  const api = useExtensionApi();
+  const order = useOrder(); // Получаваме order обекта
   
-  // ПРОВЕРКА - показваме САМО за България (същата логика като Checkout.jsx)
+  // ПРОВЕРКА - показваме САМО за България
   const isBulgaria = country?.isoCode === 'BG' || 
                      market?.handle === 'bulgaria' || 
                      market?.handle === 'bg';
   
-  if (!isBulgaria) {
+  if (!isBulgaria || !order) {
     return null;
   }
   
-  // За сега показваме информативен блок с курса
-  // Order Status page има ограничен достъп до данни
-  const showRateInfo = settings?.show_rate_info !== false;
-  const highlightEuroSwitch = settings?.highlight_euro_switch !== false;
+  // Извличаме данните от order
+  const lineItems = order.lineItems || [];
+  const shippingAmount = parseFloat(order.shippingPrice?.amount || 0);
+  const totalAmount = parseFloat(order.totalPrice?.amount || 0);
+  const currency = order.totalPrice?.currencyCode || 'BGN';
+  const isBGN = currency === 'BGN';
   
   return (
     <View padding="base" border="base" background="subdued">
       <BlockStack spacing="base">
-        {/* Заглавие с флагове */}
+        {/* Заглавие с флагове - същото като в Checkout.jsx */}
         <Text size="medium" emphasis="bold">
-          🇧🇬 Валутен курс BGN/EUR 🇪🇺
+          🇧🇬 Твоята поръчка 🇪🇺
         </Text>
         
-        {/* Информация за курса */}
-        {showRateInfo && (
-          <View padding="base" background="base" cornerRadius="base">
-            <BlockStack spacing="tight">
-              <InlineLayout spacing="base" blockAlignment="center">
-                <Text size="small">🇧🇬 1 BGN =</Text>
-                <Text size="small" emphasis="bold">0.51129 EUR</Text>
-              </InlineLayout>
-              
-              <InlineLayout spacing="base" blockAlignment="center">
-                <Text size="small">🇪🇺 1 EUR =</Text>
-                <Text size="small" emphasis="bold">{EUR_TO_BGN_RATE} BGN</Text>
-              </InlineLayout>
-            </BlockStack>
-          </View>
-        )}
-        
-        {/* Информация за преминаване към евро */}
-        {highlightEuroSwitch && (
-          <>
-            <Divider />
-            <View padding="tight">
+        {/* Разбивка секция */}
+        <View padding="base" background="base" cornerRadius="base">
+          <BlockStack spacing="base">
+            <Text size="small" emphasis="bold">
+              Продукти:
+            </Text>
+            
+            {/* Продукти по отделно */}
+            {lineItems.length > 0 && (
               <BlockStack spacing="tight">
-                <Text size="small" emphasis="bold">
-                  ℹ️ Важна информация
-                </Text>
-                <Text size="small" appearance="subdued">
-                  От 01.01.2026 г. България преминава към евро. 
-                  Всички цени ще бъдат автоматично конвертирани.
-                </Text>
+                {lineItems.map((item, index) => {
+                  const lineAmount = parseFloat(item.price?.amount || 0);
+                  const quantity = item.quantity || 1;
+                  
+                  const displayPrice = isBGN
+                    ? `${lineAmount.toFixed(2)} ЛВ / ${convertBGNtoEUR(lineAmount)} EUR`
+                    : `${lineAmount.toFixed(2)} EUR / ${convertEURtoBGN(lineAmount)} ЛВ`;
+
+                  return (
+                    <InlineLayout
+                      key={item.id || index}
+                      spacing="base"
+                      blockAlignment="center"
+                    >
+                      <View inlineAlignment="start" minInlineSize="fill">
+                        <Text size="small">
+                          {quantity}× {item.title}
+                        </Text>
+                      </View>
+                      <View inlineAlignment="end">
+                        <Text size="small" emphasis="bold">
+                          {displayPrice}
+                        </Text>
+                      </View>
+                    </InlineLayout>
+                  );
+                })}
               </BlockStack>
-            </View>
-          </>
-        )}
+            )}
+
+            {/* Доставка */}
+            {shippingAmount > 0 && (
+              <>
+                <Divider />
+                <InlineLayout spacing="base" blockAlignment="center">
+                  <View inlineAlignment="start" minInlineSize="fill">
+                    <Text size="small">Доставка</Text>
+                  </View>
+                  <View inlineAlignment="end">
+                    <Text size="small" emphasis="bold">
+                      {isBGN
+                        ? `${shippingAmount.toFixed(2)} ЛВ / ${convertBGNtoEUR(shippingAmount)} EUR`
+                        : `${shippingAmount.toFixed(2)} EUR / ${convertEURtoBGN(shippingAmount)} ЛВ`
+                      }
+                    </Text>
+                  </View>
+                </InlineLayout>
+              </>
+            )}
+          </BlockStack>
+        </View>
         
-        {/* Footer */}
+        {/* Обща сума */}
+        <View padding="tight" background="interactive" cornerRadius="base">
+          <InlineLayout spacing="base" blockAlignment="center">
+            <View inlineAlignment="start" minInlineSize="fill">
+              <Text size="medium" emphasis="bold">Общо:</Text>
+            </View>
+            <View inlineAlignment="end">
+              <Text size="large" emphasis="bold">
+                {isBGN
+                  ? `${totalAmount.toFixed(2)} ЛВ / ${convertBGNtoEUR(totalAmount)} EUR`
+                  : `${totalAmount.toFixed(2)} EUR / ${convertEURtoBGN(totalAmount)} ЛВ`
+                }
+              </Text>
+            </View>
+          </InlineLayout>
+        </View>
+        
+        {/* Курс */}
         <View padding="extraTight">
           <Text size="small" appearance="subdued">
-            Фиксиран курс на БНБ
+            Курс: 1 EUR = {EUR_TO_BGN_RATE} BGN (фиксиран курс на БНБ)
           </Text>
         </View>
       </BlockStack>

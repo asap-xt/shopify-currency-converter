@@ -1,11 +1,11 @@
-# extensions/order-status-currency-display/shopify.ui.extension.toml
+# extensions/order-status-currency-display/shopify.extension.toml
 api_version = "2024-07"
 type = "ui_extension"
 name = "Order Status Currency Display"
 handle = "order-status-currency-display"
 
 targeting = [
-  { target = "customer-account.order-status.block.render", module = "./src/OrderStatus.jsx" }
+  { target = "customer-account.order-status.block.render", module = "./src/OrderStatus.jsx", default_placement = "ORDER_SUMMARY1" }
 ]
 
 [capabilities]
