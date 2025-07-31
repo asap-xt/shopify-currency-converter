@@ -380,7 +380,7 @@ router.get('/api/billing/create', authenticateRequest, async (ctx) => {
       data: `mutation {
         appSubscriptionCreate(
           name: "BGN/EUR Price Display",
-          test: ${TEST_MODE},
+          test: ${TEST_MODE ? true : null},
           trialDays: 5,
           returnUrl: "${HOST}/api/billing/callback?shop=${ctx.state.shop}",
           lineItems: [{
