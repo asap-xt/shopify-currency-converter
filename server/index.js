@@ -314,6 +314,15 @@ async function authenticateRequest(ctx, next) {
     console.log('Valid session found:', !!session);
     console.log('Session has access token:', !!(session && session.accessToken));
     
+    // For billing endpoints, allow access even without session
+    if (ctx.path.includes('/api/billing/')) {
+      console.log('Billing endpoint - allowing access without session');
+      ctx.state.shop = shop;
+      ctx.state.session = session || { shop: shop, accessToken: null };
+      await next();
+      return;
+    }
+    
     if (!session || !session.accessToken) {
       console.log('No valid session found for API request');
       ctx.status = 401;
@@ -584,7 +593,23 @@ router.get('/api/billing/create', authenticateRequest, async (ctx) => {
   console.log('=== BILLING CREATE ===');
   console.log('Shop:', ctx.state.shop);
   console.log('Has access token:', !!ctx.state.session.accessToken);
-  console.log('Access token length:', ctx.state.session.accessToken?.length);
+  
+  // If no access token, redirect to OAuth
+  if (!ctx.state.session.accessToken) {
+    console.log('No access token, redirecting to OAuth');
+    const authUrl = `https://${ctx.state.shop}/admin/oauth/authorize?` + 
+      `client_id=${SHOPIFY_API_KEY}&` +
+      `scope=${SCOPES}&` +
+      `redirect_uri=${encodeURIComponent(HOST + '/auth/callback')}&` +
+      `state=${Math.random().toString(36).substring(7)}`;
+    
+    ctx.body = { 
+      error: 'Authentication required',
+      authUrl: authUrl,
+      message: 'Please authenticate first'
+    };
+    return;
+  }
   
   try {
     const client = new GraphqlClient({
