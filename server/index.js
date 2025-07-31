@@ -396,6 +396,13 @@ async function checkBillingOnAppLoad(ctx, next) {
     return;
   }
   
+  // If already in billing mode, skip the check
+  if (ctx.query.billing === 'required') {
+    console.log('Already in billing mode, skipping check');
+    await next();
+    return;
+  }
+  
   try {
     // Check if we have a valid session
     const sessions = await memorySessionStorage.findSessionsByShop(shop);
@@ -403,9 +410,12 @@ async function checkBillingOnAppLoad(ctx, next) {
     
     if (!session || !session.accessToken) {
       // No session, let the normal flow handle it
+      console.log('No valid session found, continuing...');
       await next();
       return;
     }
+    
+    console.log('Checking subscriptions for shop:', shop);
     
     // Check for active subscriptions
     const client = new GraphqlClient({
@@ -427,15 +437,23 @@ async function checkBillingOnAppLoad(ctx, next) {
     });
     
     const subscriptions = response.body.data.currentAppInstallation.activeSubscriptions || [];
+    console.log('Found subscriptions:', subscriptions.length);
     
     // Check for valid subscription
     const hasValidSubscription = subscriptions.some(sub => {
-      if (sub.status === 'ACTIVE') return true;
+      console.log('Checking subscription:', sub.id, 'status:', sub.status, 'trialDays:', sub.trialDays);
+      
+      if (sub.status === 'ACTIVE') {
+        console.log('Found ACTIVE subscription');
+        return true;
+      }
       
       if (sub.status === 'PENDING' && sub.trialDays > 0) {
         const trialEndDate = new Date(sub.createdAt);
         trialEndDate.setDate(trialEndDate.getDate() + sub.trialDays);
-        return new Date() < trialEndDate;
+        const isValid = new Date() < trialEndDate;
+        console.log('PENDING subscription with trial, valid:', isValid);
+        return isValid;
       }
       
       return false;
