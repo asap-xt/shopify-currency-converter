@@ -402,12 +402,17 @@ router.get('/api/billing/create', authenticateRequest, async (ctx) => {
     
     const TEST_MODE = process.env.NODE_ENV !== 'production';
     
+    // ВАЖНО: Този URL трябва да е добавен в Allowed redirection URLs в Partner Dashboard
+    const returnUrl = `${HOST}/api/billing/callback?shop=${ctx.state.shop}`;
+    console.log('Billing return URL:', returnUrl);
+    
     const response = await client.query({
       data: `mutation {
         appSubscriptionCreate(
           name: "BGN/EUR Price Display",
           trialDays: 0,
-          returnUrl: "${HOST}/api/billing/callback?shop=${ctx.state.shop}",
+          test: ${TEST_MODE},
+          returnUrl: "${returnUrl}",
           lineItems: [{
             plan: {
               appRecurringPricingDetails: {
@@ -438,11 +443,12 @@ router.get('/api/billing/create', authenticateRequest, async (ctx) => {
       return;
     }
     
+    console.log('Billing confirmation URL:', confirmationUrl);
     ctx.body = { confirmationUrl };
   } catch (error) {
     console.error('Create subscription error:', error);
     ctx.status = 500;
-    ctx.body = { error: 'Failed to create subscription' };
+    ctx.body = { error: 'Failed to create subscription: ' + error.message };
   }
 });
 
@@ -465,6 +471,51 @@ router.get('/api/billing/status', authenticateRequest, requiresSubscription, asy
     hasActiveSubscription: ctx.state.hasActiveSubscription,
     shop: ctx.state.shop
   };
+});
+
+// Debug billing endpoint
+router.get('/api/billing/test', authenticateRequest, async (ctx) => {
+  try {
+    const client = new shopify.api.clients.Graphql({
+      session: ctx.state.session,
+    });
+    
+    // Проверяваме какви subscriptions има
+    const checkResponse = await client.query({
+      data: `{
+        currentAppInstallation {
+          id
+          activeSubscriptions {
+            id
+            name
+            status
+            test
+            trialDays
+            createdAt
+          }
+        }
+      }`
+    });
+    
+    ctx.body = {
+      shop: ctx.state.shop,
+      installation: checkResponse.body.data.currentAppInstallation,
+      hasAccessToken: !!ctx.state.session.accessToken,
+      sessionInfo: {
+        id: ctx.state.session.id,
+        shop: ctx.state.session.shop,
+        isOnline: ctx.state.session.isOnline,
+        scope: ctx.state.session.scope
+      }
+    };
+  } catch (error) {
+    console.error('Billing test error:', error);
+    ctx.status = 500;
+    ctx.body = { 
+      error: error.message,
+      shop: ctx.state.shop 
+    };
+  }
 });
 
 // API endpoints
