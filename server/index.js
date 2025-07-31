@@ -920,16 +920,19 @@ router.get('(/)', async (ctx) => {
           
           // Check billing status
           checkBillingStatus();
-        } else if (response.status === 302 || response.redirected) {
-          // Redirected due to no subscription
-          showBillingPrompt();
         } else {
           console.error('Failed to load shop data');
           document.getElementById('loading').innerHTML = 'Грешка при зареждане';
+          
+          // ВАЖНО: Показваме billing при redirect
+          if (response.status === 302 || response.redirected) {
+            showBillingPrompt();
+          }
         }
       } catch (error) {
         console.error('Error loading app data:', error);
-        document.getElementById('loading').innerHTML = 'Грешка при зареждане';
+        // При мрежова грешка също проверяваме billing
+        checkBillingStatus();
       }
     }
     
@@ -941,11 +944,16 @@ router.get('(/)', async (ctx) => {
           billingStatus = data.hasActiveSubscription;
           
           if (!billingStatus) {
-            showBillingPrompt();
+            showBillingPrompt(); // Показваме prompt ако няма активен план
           }
+        } else if (response.status === 302) {
+          // Ако сме redirected, показваме billing prompt
+          showBillingPrompt();
         }
       } catch (error) {
         console.error('Error checking billing:', error);
+        // При грешка също показваме billing prompt
+        showBillingPrompt();
       }
     }
     
@@ -979,7 +987,7 @@ router.get('(/)', async (ctx) => {
         const data = await response.json();
         
         if (data.confirmationUrl) {
-          // Redirect to Shopify billing page
+          // ВАЖНО: Пренасочваме към Shopify billing page
           window.top.location.href = data.confirmationUrl;
         } else {
           alert('Грешка при стартиране на пробен период. Моля опитайте отново.');
