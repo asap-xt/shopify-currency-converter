@@ -381,15 +381,38 @@ async function authenticateRequest(ctx, next) {
   await next();
 }
 
-// Billing check middleware
-async function requiresSubscription(ctx, next) {
+// Billing check middleware - ВАЖНО: Трябва да се изпълнява при всяко зареждане
+async function checkBillingOnAppLoad(ctx, next) {
+  // Skip billing check for auth and callback routes
+  if (ctx.path === '/auth' || ctx.path === '/auth/callback' || ctx.path.startsWith('/api/billing')) {
+    await next();
+    return;
+  }
+  
+  // Skip if no shop parameter
+  const shop = ctx.query.shop;
+  if (!shop) {
+    await next();
+    return;
+  }
+  
   try {
-    const client = new GraphqlClient({
-      domain: ctx.state.shop,
-      accessToken: ctx.state.session.accessToken,
-    });
+    // Check if we have a valid session
+    const sessions = await memorySessionStorage.findSessionsByShop(shop);
+    const session = sessions.find(s => !s.isOnline);
+    
+    if (!session || !session.accessToken) {
+      // No session, let the normal flow handle it
+      await next();
+      return;
+    }
     
     // Check for active subscriptions
+    const client = new GraphqlClient({
+      domain: shop,
+      accessToken: session.accessToken,
+    });
+    
     const response = await client.query({
       data: `{
         currentAppInstallation {
@@ -405,51 +428,33 @@ async function requiresSubscription(ctx, next) {
     
     const subscriptions = response.body.data.currentAppInstallation.activeSubscriptions || [];
     
-    // НОВАТА ЛОГИКА ЗА TRIAL:
+    // Check for valid subscription
     const hasValidSubscription = subscriptions.some(sub => {
-      // Active subscription
       if (sub.status === 'ACTIVE') return true;
       
-      // Pending subscription with trial
       if (sub.status === 'PENDING' && sub.trialDays > 0) {
-        // Calculate trial end date
         const trialEndDate = new Date(sub.createdAt);
         trialEndDate.setDate(trialEndDate.getDate() + sub.trialDays);
-        
-        // Check if still in trial period
-        const stillInTrial = new Date() < trialEndDate;
-        console.log('Trial check:', {
-          status: sub.status,
-          trialDays: sub.trialDays,
-          createdAt: sub.createdAt,
-          trialEndDate: trialEndDate,
-          stillInTrial: stillInTrial
-        });
-        
-        return stillInTrial;
+        return new Date() < trialEndDate;
       }
       
       return false;
     });
     
-    ctx.state.hasActiveSubscription = hasValidSubscription;
-    
-    // Always allow access to billing endpoints
-    if (ctx.path.includes('/api/billing') || ctx.path.includes('/api/subscription')) {
-      await next();
+    // If no valid subscription, redirect to billing
+    if (!hasValidSubscription) {
+      console.log('No active subscription found, redirecting to billing');
+      ctx.redirect(`/?billing=required&shop=${shop}`);
       return;
     }
     
-    // Check if needs subscription
-    if (!hasValidSubscription && ctx.path !== '/') {
-      ctx.redirect('/?billing=required');
-      return;
-    }
-    
+    console.log('Active subscription found, continuing...');
     await next();
+    
   } catch (error) {
-    console.error('Subscription check error:', error);
-    // Allow access on error to prevent blocking
+    console.error('Billing check error:', error);
+    // On error, allow access but show billing prompt
+    ctx.state.showBillingPrompt = true;
     await next();
   }
 }
@@ -651,10 +656,11 @@ router.get('/api/orders', authenticateRequest, requiresSubscription, async (ctx)
 });
 
 // Main app route
-router.get('(/)', async (ctx) => {
+router.get('(/)', checkBillingOnAppLoad, async (ctx) => {
   console.log('=== MAIN ROUTE ===');
   const shop = ctx.query.shop;
   const host = ctx.query.host;
+  const billingRequired = ctx.query.billing === 'required';
   
   if (!shop) {
     ctx.body = "Missing shop parameter. Please install the app through Shopify.";
@@ -926,9 +932,76 @@ router.get('(/)', async (ctx) => {
       font-weight: 500;
       color: #202223;
     }
+    .billing-overlay {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(0, 0, 0, 0.5);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 1000;
+    }
+    .billing-modal {
+      background: white;
+      border-radius: 12px;
+      padding: 40px;
+      max-width: 500px;
+      text-align: center;
+      box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
+    }
+    .billing-modal h2 {
+      margin: 0 0 16px 0;
+      font-size: 24px;
+      color: #202223;
+    }
+    .billing-modal p {
+      margin: 0 0 24px 0;
+      color: #616161;
+      line-height: 1.6;
+    }
+    .billing-features {
+      text-align: left;
+      margin: 24px 0;
+    }
+    .billing-features li {
+      margin-bottom: 8px;
+      color: #616161;
+    }
   </style>
 </head>
 <body>
+  ${billingRequired ? `
+  <div class="billing-overlay" id="billing-overlay">
+    <div class="billing-modal">
+      <h2>🎁 Започнете безплатен пробен период</h2>
+      <p>За да използвате BGN/EUR Price Display, трябва да активирате плана.</p>
+      
+      <div class="billing-features">
+        <ul>
+          <li>✓ 5-дневен безплатен пробен период</li>
+          <li>✓ Показване на цени в BGN и EUR</li>
+          <li>✓ Автоматично преминаване към EUR след 2026</li>
+          <li>✓ Пълна разбивка на поръчката</li>
+        </ul>
+      </div>
+      
+      <p><strong>След пробния период: $14.99/месец</strong><br>
+      Можете да отмените по всяко време</p>
+      
+      <button onclick="startBilling()" class="big-button" style="background: #202223; margin-right: 12px;">
+        Започни безплатен пробен период
+      </button>
+      
+      <button onclick="closeBillingModal()" style="background: transparent; border: 1px solid #e1e3e5; color: #616161;">
+        Затвори
+      </button>
+    </div>
+  </div>
+  ` : ''}
+
   <div class="container">
     <div class="header">
       <h1>BGN/EUR Price Display</h1>
@@ -1136,6 +1209,13 @@ router.get('(/)', async (ctx) => {
       } catch (error) {
         console.error('Billing error:', error);
         alert('Грешка при стартиране на пробен период. Моля опитайте отново.');
+      }
+    }
+    
+    function closeBillingModal() {
+      const overlay = document.getElementById('billing-overlay');
+      if (overlay) {
+        overlay.style.display = 'none';
       }
     }
     
