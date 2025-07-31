@@ -550,6 +550,10 @@ async function requiresSubscription(ctx, next) {
 
 // Billing endpoints
 router.get('/api/billing/create', authenticateRequest, async (ctx) => {
+  console.log('=== BILLING CREATE ===');
+  console.log('Shop:', ctx.state.shop);
+  console.log('Has access token:', !!ctx.state.session.accessToken);
+  
   try {
     const client = new GraphqlClient({
       domain: ctx.state.shop,
@@ -557,38 +561,45 @@ router.get('/api/billing/create', authenticateRequest, async (ctx) => {
     });
     
     const TEST_MODE = process.env.NODE_ENV !== 'production';
+    console.log('Test mode:', TEST_MODE);
     
     // ВАЖНО: Този URL трябва да е добавен в Allowed redirection URLs в Partner Dashboard
     const returnUrl = `${HOST}/api/billing/callback?shop=${ctx.state.shop}`;
     console.log('Billing return URL:', returnUrl);
     
-    const response = await client.query({
-      data: `mutation {
-        appSubscriptionCreate(
-          name: "BGN/EUR Price Display",
-          trialDays: 0,
-          test: ${TEST_MODE},
-          returnUrl: "${returnUrl}",
-          lineItems: [{
-            plan: {
-              appRecurringPricingDetails: {
-                price: { amount: 14.99, currencyCode: "USD" },
-                interval: EVERY_30_DAYS
-              }
+    const mutation = `mutation {
+      appSubscriptionCreate(
+        name: "BGN/EUR Price Display"
+        trialDays: 0
+        test: ${TEST_MODE}
+        returnUrl: "${returnUrl}"
+        lineItems: [{
+          plan: {
+            appRecurringPricingDetails: {
+              price: { amount: 14.99, currencyCode: "USD" }
+              interval: "EVERY_30_DAYS"
             }
-          }]
-        ) {
-          appSubscription {
-            id
           }
-          confirmationUrl
-          userErrors {
-            field
-            message
-          }
+        }]
+      ) {
+        appSubscription {
+          id
         }
-      }`
+        confirmationUrl
+        userErrors {
+          field
+          message
+        }
+      }
+    }`;
+    
+    console.log('GraphQL mutation:', mutation);
+    
+    const response = await client.query({
+      data: mutation
     });
+    
+    console.log('GraphQL response:', JSON.stringify(response.body, null, 2));
     
     const { confirmationUrl, userErrors } = response.body.data.appSubscriptionCreate;
     
