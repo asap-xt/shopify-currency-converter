@@ -624,7 +624,9 @@ router.get('/api/billing/create', authenticateRequest, async (ctx) => {
     }
     
     console.log('Creating GraphqlClient with access token...');
-    const client = new GraphqlClient({
+    
+    // Use the correct method to create GraphQL client
+    const client = new shopify.clients.Graphql({
       domain: ctx.state.shop,
       accessToken: ctx.state.session.accessToken,
     });
