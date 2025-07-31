@@ -14,6 +14,7 @@ console.log('SHOPIFY_API_KEY:', process.env.SHOPIFY_API_KEY ? 'SET' : 'MISSING')
 console.log('SHOPIFY_API_SECRET:', process.env.SHOPIFY_API_SECRET ? 'SET' : 'MISSING');
 console.log('SCOPES:', process.env.SCOPES);
 console.log('HOST:', process.env.HOST);
+console.log('HOST_NAME:', process.env.HOST_NAME);
 console.log('====================================');
 
 // Session storage
@@ -204,8 +205,6 @@ router.get('/health', async (ctx) => {
   ctx.body = 'OK';
 });
 
-// Добавете този код след health check endpoint-а във вашия index.js
-
 // Public debug endpoint (без автентикация) - САМО ЗА ДЕБЪГ!
 router.get('/public/billing/debug/:shop', async (ctx) => {
   const shop = ctx.params.shop;
@@ -226,8 +225,9 @@ router.get('/public/billing/debug/:shop', async (ctx) => {
       return;
     }
     
-    const client = new shopify.api.clients.Graphql({
-      session: session,
+    const client = new GraphqlClient({
+      domain: shop,
+      accessToken: session.accessToken,
     });
     
     const checkResponse = await client.query({
@@ -384,8 +384,9 @@ async function authenticateRequest(ctx, next) {
 // Billing check middleware
 async function requiresSubscription(ctx, next) {
   try {
-    const client = new shopify.api.clients.Graphql({
-      session: ctx.state.session,
+    const client = new GraphqlClient({
+      domain: ctx.state.shop,
+      accessToken: ctx.state.session.accessToken,
     });
     
     // Check for active subscriptions
@@ -456,8 +457,9 @@ async function requiresSubscription(ctx, next) {
 // Billing endpoints
 router.get('/api/billing/create', authenticateRequest, async (ctx) => {
   try {
-    const client = new shopify.api.clients.Graphql({
-      session: ctx.state.session,
+    const client = new GraphqlClient({
+      domain: ctx.state.shop,
+      accessToken: ctx.state.session.accessToken,
     });
     
     const TEST_MODE = process.env.NODE_ENV !== 'production';
@@ -470,7 +472,7 @@ router.get('/api/billing/create', authenticateRequest, async (ctx) => {
       data: `mutation {
         appSubscriptionCreate(
           name: "BGN/EUR Price Display",
-          trialDays: 0,
+          trialDays: 5,
           test: ${TEST_MODE},
           returnUrl: "${returnUrl}",
           lineItems: [{
@@ -536,8 +538,9 @@ router.get('/api/billing/status', authenticateRequest, requiresSubscription, asy
 // Debug billing endpoint
 router.get('/api/billing/test', authenticateRequest, async (ctx) => {
   try {
-    const client = new shopify.api.clients.Graphql({
-      session: ctx.state.session,
+    const client = new GraphqlClient({
+      domain: ctx.state.shop,
+      accessToken: ctx.state.session.accessToken,
     });
     
     // Проверяваме какви subscriptions има
@@ -659,6 +662,10 @@ router.get('(/)', async (ctx) => {
     return;
   }
   
+  // Check if we have a valid session
+  const sessions = await memorySessionStorage.findSessionsByShop(shop);
+  const session = sessions.find(s => !s.isOnline);
+  
   ctx.set('Content-Type', 'text/html');
   ctx.body = `
 <!DOCTYPE html>
@@ -668,7 +675,7 @@ router.get('(/)', async (ctx) => {
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>BGN/EUR Price Display</title>
   <meta name="shopify-api-key" content="${SHOPIFY_API_KEY}" />
-  <script src="https://cdn.shopify.com/shopifycloud/app-bridge.js"></script>
+  <script src="https://unpkg.com/@shopify/app-bridge@2"></script>
   <style>
     body {
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
@@ -1017,6 +1024,30 @@ router.get('(/)', async (ctx) => {
   </div>
   
   <script>
+    // Initialize App Bridge
+    const urlParams = new URLSearchParams(window.location.search);
+    const host = urlParams.get('host');
+    const shop = urlParams.get('shop');
+    
+    if (host && shop) {
+      const app = AppBridge.createApp({
+        apiKey: '${SHOPIFY_API_KEY}',
+        host: host,
+        forceRedirect: true,
+      });
+      
+      // Check if we have a valid session
+      const hasSession = ${!!(session && session.accessToken)};
+      
+      if (!hasSession) {
+        // Redirect to auth using App Bridge
+        AppBridge.actions.Redirect.create(app).dispatch(
+          AppBridge.actions.Redirect.Action.REMOTE,
+          '${HOST}/auth?shop=' + shop
+        );
+      }
+    }
+    
     let billingStatus = null;
     
     async function loadAppData() {
@@ -1160,6 +1191,99 @@ router.get('/debug', async (ctx) => {
     },
     sessions: allSessions
   };
+});
+
+// OAuth flow for embedded apps
+router.get('/auth', async (ctx) => {
+  console.log('=== AUTH START ===');
+  const shop = ctx.query.shop;
+  console.log('Shop parameter:', shop);
+  
+  if (!shop) {
+    console.log('Missing shop parameter');
+    ctx.throw(400, 'Missing shop parameter');
+    return;
+  }
+  
+  try {
+    console.log('Creating OAuth URL...');
+    // For embedded apps, we need to use App Bridge redirect
+    const authUrl = `https://${shop}/admin/oauth/authorize?` + 
+      `client_id=${SHOPIFY_API_KEY}&` +
+      `scope=${SCOPES}&` +
+      `redirect_uri=${encodeURIComponent(HOST + '/auth/callback')}&` +
+      `state=${Math.random().toString(36).substring(7)}`;
+    
+    console.log('OAuth URL generated:', authUrl);
+    ctx.redirect(authUrl);
+  } catch (error) {
+    console.error('Error creating OAuth URL:', error);
+    ctx.status = 500;
+    ctx.body = 'Auth initialization failed: ' + error.message;
+  }
+});
+
+// OAuth callback
+router.get('/auth/callback', async (ctx) => {
+  console.log('=== AUTH CALLBACK ===');
+  console.log('Callback query:', ctx.query);
+  
+  const { code, hmac, shop, state, timestamp } = ctx.query;
+  
+  if (!code || !shop) {
+    console.error('Missing required OAuth parameters');
+    ctx.status = 400;
+    ctx.body = 'Missing required OAuth parameters';
+    return;
+  }
+  
+  try {
+    console.log('Exchanging code for access token...');
+    
+    // Exchange code for access token
+    const tokenResponse = await fetch(`https://${shop}/admin/oauth/access_token`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        client_id: SHOPIFY_API_KEY,
+        client_secret: SHOPIFY_API_SECRET,
+        code: code,
+      }),
+    });
+    
+    if (!tokenResponse.ok) {
+      throw new Error(`Token exchange failed: ${tokenResponse.status}`);
+    }
+    
+    const tokenData = await tokenResponse.json();
+    console.log('Token exchange successful for shop:', shop);
+    
+    // Create session - use Session class directly
+    const session = new Session({
+      id: `${shop}-offline`,
+      shop: shop,
+      state: state,
+      isOnline: false,
+      accessToken: tokenData.access_token,
+      scope: tokenData.scope,
+    });
+    
+    // Store session
+    await memorySessionStorage.storeSession(session);
+    console.log('Session stored successfully');
+    
+    // Redirect to app
+    const redirectUrl = `/?shop=${shop}&host=${ctx.query.host}`;
+    console.log('Redirecting to:', redirectUrl);
+    ctx.redirect(redirectUrl);
+    
+  } catch (error) {
+    console.error("Auth callback failed:", error);
+    ctx.status = 500;
+    ctx.body = 'Authentication failed: ' + error.message;
+  }
 });
 
 app.use(router.routes());
