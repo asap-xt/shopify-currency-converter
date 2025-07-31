@@ -1186,24 +1186,38 @@ router.get('(/)', checkBillingOnAppLoad, async (ctx) => {
     const host = urlParams.get('host');
     const shop = urlParams.get('shop');
     
-    if (host && shop) {
-      const app = AppBridge.createApp({
-        apiKey: '${SHOPIFY_API_KEY}',
-        host: host,
-        forceRedirect: true,
-      });
-      
-      // Check if we have a valid session
-      const hasSession = ${!!(session && session.accessToken)};
-      
-      if (!hasSession) {
-        // Redirect to auth using App Bridge
-        AppBridge.actions.Redirect.create(app).dispatch(
-          AppBridge.actions.Redirect.Action.REMOTE,
-          '${HOST}/auth?shop=' + shop
-        );
+    // Wait for AppBridge to load
+    function waitForAppBridge() {
+      if (typeof AppBridge !== 'undefined') {
+        initializeApp();
+      } else {
+        setTimeout(waitForAppBridge, 100);
       }
     }
+    
+    function initializeApp() {
+      if (host && shop) {
+        const app = AppBridge.createApp({
+          apiKey: '${SHOPIFY_API_KEY}',
+          host: host,
+          forceRedirect: true,
+        });
+        
+        // Check if we have a valid session
+        const hasSession = ${!!(session && session.accessToken)};
+        
+        if (!hasSession) {
+          // Redirect to auth using App Bridge
+          AppBridge.actions.Redirect.create(app).dispatch(
+            AppBridge.actions.Redirect.Action.REMOTE,
+            '${HOST}/auth?shop=' + shop
+          );
+        }
+      }
+    }
+    
+    // Start waiting for AppBridge
+    waitForAppBridge();
     
     let billingStatus = null;
     
