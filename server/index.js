@@ -561,7 +561,7 @@ router.get('/api/billing/create', authenticateRequest, async (ctx) => {
       accessToken: ctx.state.session.accessToken,
     });
     
-    const TEST_MODE = process.env.NODE_ENV !== 'production';
+    const TEST_MODE = false; // Set to false for production billing
     console.log('Test mode:', TEST_MODE);
     console.log('NODE_ENV:', process.env.NODE_ENV);
     
