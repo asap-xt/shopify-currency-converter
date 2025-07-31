@@ -204,6 +204,66 @@ router.get('/health', async (ctx) => {
   ctx.body = 'OK';
 });
 
+// Добавете този код след health check endpoint-а във вашия index.js
+
+// Public debug endpoint (без автентикация) - САМО ЗА ДЕБЪГ!
+router.get('/public/billing/debug/:shop', async (ctx) => {
+  const shop = ctx.params.shop;
+  
+  try {
+    // Намираме сесията за този магазин
+    const sessions = await memorySessionStorage.findSessionsByShop(shop);
+    const session = sessions.find(s => !s.isOnline);
+    
+    if (!session || !session.accessToken) {
+      ctx.body = {
+        error: 'No valid session found',
+        shop: shop,
+        sessionsCount: sessions.length,
+        hasSession: !!session,
+        hasToken: session ? !!session.accessToken : false
+      };
+      return;
+    }
+    
+    const client = new shopify.api.clients.Graphql({
+      session: session,
+    });
+    
+    const checkResponse = await client.query({
+      data: `{
+        currentAppInstallation {
+          id
+          activeSubscriptions {
+            id
+            name
+            status
+            test
+            trialDays
+            createdAt
+          }
+        }
+      }`
+    });
+    
+    ctx.body = {
+      shop: shop,
+      installation: checkResponse.body.data.currentAppInstallation,
+      hasAccessToken: !!session.accessToken,
+      sessionId: session.id,
+      timestamp: new Date().toISOString()
+    };
+  } catch (error) {
+    console.error('Public debug error:', error);
+    ctx.status = 500;
+    ctx.body = { 
+      error: error.message,
+      shop: shop,
+      stack: error.stack 
+    };
+  }
+});
+
 // Helper functions за Token Exchange подхода
 function getSessionTokenHeader(ctx) {
   return ctx.headers['authorization']?.replace('Bearer ', '');
