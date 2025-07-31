@@ -343,9 +343,35 @@ async function requiresSubscription(ctx, next) {
     });
     
     const subscriptions = response.body.data.currentAppInstallation.activeSubscriptions || [];
-    const hasActiveSubscription = subscriptions.some(sub => sub.status === 'ACTIVE');
     
-    ctx.state.hasActiveSubscription = hasActiveSubscription;
+    // НОВАТА ЛОГИКА ЗА TRIAL:
+    const hasValidSubscription = subscriptions.some(sub => {
+      // Active subscription
+      if (sub.status === 'ACTIVE') return true;
+      
+      // Pending subscription with trial
+      if (sub.status === 'PENDING' && sub.trialDays > 0) {
+        // Calculate trial end date
+        const trialEndDate = new Date(sub.createdAt);
+        trialEndDate.setDate(trialEndDate.getDate() + sub.trialDays);
+        
+        // Check if still in trial period
+        const stillInTrial = new Date() < trialEndDate;
+        console.log('Trial check:', {
+          status: sub.status,
+          trialDays: sub.trialDays,
+          createdAt: sub.createdAt,
+          trialEndDate: trialEndDate,
+          stillInTrial: stillInTrial
+        });
+        
+        return stillInTrial;
+      }
+      
+      return false;
+    });
+    
+    ctx.state.hasActiveSubscription = hasValidSubscription;
     
     // Always allow access to billing endpoints
     if (ctx.path.includes('/api/billing') || ctx.path.includes('/api/subscription')) {
@@ -354,7 +380,7 @@ async function requiresSubscription(ctx, next) {
     }
     
     // Check if needs subscription
-    if (!hasActiveSubscription && ctx.path !== '/') {
+    if (!hasValidSubscription && ctx.path !== '/') {
       ctx.redirect('/?billing=required');
       return;
     }
@@ -381,12 +407,12 @@ router.get('/api/billing/create', authenticateRequest, async (ctx) => {
         appSubscriptionCreate(
           name: "BGN/EUR Price Display",
           test: null,
-          trialDays: 5,
+          trialDays: 0,
           returnUrl: "${HOST}/api/billing/callback?shop=${ctx.state.shop}",
           lineItems: [{
             plan: {
               appRecurringPricingDetails: {
-                price: { amount: 14.99, currencyCode: USD },
+                price: { amount: 14.99, currencyCode: "USD" },
                 interval: EVERY_30_DAYS
               }
             }
