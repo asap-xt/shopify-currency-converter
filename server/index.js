@@ -1311,7 +1311,6 @@ router.get('(/)', checkBillingOnAppLoad, async (ctx) => {
     }
     
     // Check URL parameters for billing status
-    const urlParams = new URLSearchParams(window.location.search);
     if (urlParams.get('billing') === 'success') {
       alert('🎉 Успешно активирахте плана! Вече можете да използвате всички функции.');
     } else if (urlParams.get('billing') === 'declined') {
