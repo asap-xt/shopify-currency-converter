@@ -795,7 +795,7 @@ router.get('/api/orders', authenticateRequest, requiresSubscription, async (ctx)
 });
 
 // Main app route
-router.get('(/)', checkBillingOnAppLoad, async (ctx) => {
+router.get('(/)', async (ctx) => {
   console.log('=== MAIN ROUTE ===');
   const shop = ctx.query.shop;
   const host = ctx.query.host;
@@ -809,6 +809,79 @@ router.get('(/)', checkBillingOnAppLoad, async (ctx) => {
     ctx.body = "Missing shop parameter. Please install the app through Shopify.";
     ctx.status = 400;
     return;
+  }
+  
+  // If already in billing mode, skip the check
+  if (billingRequired) {
+    console.log('Already in billing mode, showing billing modal');
+  } else {
+    // Check billing status
+    console.log('Checking billing status...');
+    try {
+      const sessions = await memorySessionStorage.findSessionsByShop(shop);
+      const session = sessions.find(s => !s.isOnline);
+      
+      console.log('Sessions found:', sessions.length);
+      console.log('Valid session found:', !!session);
+      console.log('Session has access token:', !!(session && session.accessToken));
+      
+      if (session && session.accessToken) {
+        // Check for active subscriptions
+        const client = new GraphqlClient({
+          domain: shop,
+          accessToken: session.accessToken,
+        });
+        
+        const response = await client.query({
+          data: `{
+            currentAppInstallation {
+              activeSubscriptions {
+                id
+                status
+                trialDays
+                createdAt
+              }
+            }
+          }`
+        });
+        
+        const subscriptions = response.body.data.currentAppInstallation.activeSubscriptions || [];
+        console.log('Found subscriptions:', subscriptions.length);
+        
+        // Check for valid subscription
+        const hasValidSubscription = subscriptions.some(sub => {
+          console.log('Checking subscription:', sub.id, 'status:', sub.status, 'trialDays:', sub.trialDays);
+          
+          if (sub.status === 'ACTIVE') {
+            console.log('Found ACTIVE subscription');
+            return true;
+          }
+          
+          if (sub.status === 'PENDING' && sub.trialDays > 0) {
+            const trialEndDate = new Date(sub.createdAt);
+            trialEndDate.setDate(trialEndDate.getDate() + sub.trialDays);
+            const isValid = new Date() < trialEndDate;
+            console.log('PENDING subscription with trial, valid:', isValid);
+            return isValid;
+          }
+          
+          return false;
+        });
+        
+        // If no valid subscription, redirect to billing
+        if (!hasValidSubscription) {
+          console.log('No active subscription found, redirecting to billing');
+          ctx.redirect(`/?billing=required&shop=${shop}`);
+          return;
+        }
+        
+        console.log('Active subscription found, continuing...');
+      }
+    } catch (error) {
+      console.error('Billing check error:', error);
+      // On error, show billing prompt
+      console.log('Error during billing check, showing billing modal');
+    }
   }
   
   // Check if we have a valid session
