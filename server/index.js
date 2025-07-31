@@ -300,6 +300,7 @@ async function authenticateRequest(ctx, next) {
   console.log('=== AUTHENTICATING REQUEST ===');
   console.log('Path:', ctx.path);
   console.log('Method:', ctx.method);
+  console.log('Query:', ctx.query);
   
   // For API requests, try to get shop from query parameter
   if (ctx.path.startsWith('/api/') && ctx.query.shop) {
@@ -309,10 +310,14 @@ async function authenticateRequest(ctx, next) {
     const sessions = await memorySessionStorage.findSessionsByShop(shop);
     const session = sessions.find(s => !s.isOnline);
     
+    console.log('Sessions found for shop:', sessions.length);
+    console.log('Valid session found:', !!session);
+    console.log('Session has access token:', !!(session && session.accessToken));
+    
     if (!session || !session.accessToken) {
       console.log('No valid session found for API request');
       ctx.status = 401;
-      ctx.body = { error: 'No valid session found' };
+      ctx.body = { error: 'No valid session found', shop: shop };
       return;
     }
     
