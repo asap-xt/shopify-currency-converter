@@ -298,7 +298,32 @@ router.get('/session-token-bounce', async (ctx) => {
 // Middleware за автентикация чрез Token Exchange
 async function authenticateRequest(ctx, next) {
   console.log('=== AUTHENTICATING REQUEST ===');
+  console.log('Path:', ctx.path);
+  console.log('Method:', ctx.method);
   
+  // For API requests, try to get shop from query parameter
+  if (ctx.path.startsWith('/api/') && ctx.query.shop) {
+    console.log('API request with shop parameter:', ctx.query.shop);
+    
+    const shop = ctx.query.shop;
+    const sessions = await memorySessionStorage.findSessionsByShop(shop);
+    const session = sessions.find(s => !s.isOnline);
+    
+    if (!session || !session.accessToken) {
+      console.log('No valid session found for API request');
+      ctx.status = 401;
+      ctx.body = { error: 'No valid session found' };
+      return;
+    }
+    
+    ctx.state.shop = shop;
+    ctx.state.session = session;
+    console.log('API request authenticated successfully');
+    await next();
+    return;
+  }
+  
+  // For embedded app requests, use session token
   let encodedSessionToken = null;
   let decodedSessionToken = null;
   
