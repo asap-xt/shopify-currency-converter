@@ -612,6 +612,14 @@ router.get('/api/billing/create', authenticateRequest, async (ctx) => {
   }
   
   try {
+    // Check if we have a valid access token
+    if (!ctx.state.session.accessToken) {
+      console.log('No access token available for GraphQL client');
+      ctx.status = 500;
+      ctx.body = { error: 'No access token available. Please authenticate first.' };
+      return;
+    }
+    
     const client = new GraphqlClient({
       domain: ctx.state.shop,
       accessToken: ctx.state.session.accessToken,
