@@ -406,7 +406,6 @@ router.get('/api/billing/create', authenticateRequest, async (ctx) => {
       data: `mutation {
         appSubscriptionCreate(
           name: "BGN/EUR Price Display",
-          test: null,
           trialDays: 0,
           returnUrl: "${HOST}/api/billing/callback?shop=${ctx.state.shop}",
           lineItems: [{
