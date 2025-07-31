@@ -553,6 +553,7 @@ router.get('/api/billing/create', authenticateRequest, async (ctx) => {
   console.log('=== BILLING CREATE ===');
   console.log('Shop:', ctx.state.shop);
   console.log('Has access token:', !!ctx.state.session.accessToken);
+  console.log('Access token length:', ctx.state.session.accessToken?.length);
   
   try {
     const client = new GraphqlClient({
@@ -562,10 +563,12 @@ router.get('/api/billing/create', authenticateRequest, async (ctx) => {
     
     const TEST_MODE = process.env.NODE_ENV !== 'production';
     console.log('Test mode:', TEST_MODE);
+    console.log('NODE_ENV:', process.env.NODE_ENV);
     
     // ВАЖНО: Този URL трябва да е добавен в Allowed redirection URLs в Partner Dashboard
     const returnUrl = `${HOST}/api/billing/callback?shop=${ctx.state.shop}`;
     console.log('Billing return URL:', returnUrl);
+    console.log('HOST:', HOST);
     
     const mutation = `mutation {
       appSubscriptionCreate(
@@ -599,7 +602,15 @@ router.get('/api/billing/create', authenticateRequest, async (ctx) => {
       data: mutation
     });
     
-    console.log('GraphQL response:', JSON.stringify(response.body, null, 2));
+    console.log('GraphQL response status:', response.status);
+    console.log('GraphQL response body:', JSON.stringify(response.body, null, 2));
+    
+    if (response.body.errors) {
+      console.error('GraphQL errors:', response.body.errors);
+      ctx.status = 500;
+      ctx.body = { error: 'GraphQL error: ' + response.body.errors[0].message };
+      return;
+    }
     
     const { confirmationUrl, userErrors } = response.body.data.appSubscriptionCreate;
     
@@ -614,6 +625,7 @@ router.get('/api/billing/create', authenticateRequest, async (ctx) => {
     ctx.body = { confirmationUrl };
   } catch (error) {
     console.error('Create subscription error:', error);
+    console.error('Error stack:', error.stack);
     ctx.status = 500;
     ctx.body = { error: 'Failed to create subscription: ' + error.message };
   }
