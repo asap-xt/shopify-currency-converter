@@ -383,8 +383,13 @@ async function authenticateRequest(ctx, next) {
 
 // Billing check middleware for main route
 async function checkBillingOnAppLoad(ctx, next) {
+  console.log('=== CHECK BILLING ON APP LOAD ===');
+  console.log('Path:', ctx.path);
+  console.log('Query:', ctx.query);
+  
   // Skip billing check for auth and callback routes
   if (ctx.path === '/auth' || ctx.path === '/auth/callback' || ctx.path.startsWith('/api/billing')) {
+    console.log('Skipping billing check for auth/callback/billing routes');
     await next();
     return;
   }
@@ -392,6 +397,7 @@ async function checkBillingOnAppLoad(ctx, next) {
   // Skip if no shop parameter
   const shop = ctx.query.shop;
   if (!shop) {
+    console.log('No shop parameter, skipping billing check');
     await next();
     return;
   }
@@ -403,10 +409,16 @@ async function checkBillingOnAppLoad(ctx, next) {
     return;
   }
   
+  console.log('Starting billing check for shop:', shop);
+  
   try {
     // Check if we have a valid session
     const sessions = await memorySessionStorage.findSessionsByShop(shop);
     const session = sessions.find(s => !s.isOnline);
+    
+    console.log('Sessions found:', sessions.length);
+    console.log('Valid session found:', !!session);
+    console.log('Session has access token:', !!(session && session.accessToken));
     
     if (!session || !session.accessToken) {
       // No session, let the normal flow handle it
