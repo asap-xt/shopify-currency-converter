@@ -1493,8 +1493,12 @@ router.get('(/)', async (ctx) => {
           // ВАЖНО: Пренасочваме към Shopify billing page
           console.log('Redirecting to:', data.confirmationUrl);
           window.top.location.href = data.confirmationUrl;
+        } else if (data.authUrl) {
+          // OAuth redirect needed
+          console.log('OAuth redirect needed, redirecting to:', data.authUrl);
+          window.top.location.href = data.authUrl;
         } else {
-          console.error('No confirmation URL in response:', data);
+          console.error('No confirmation URL or auth URL in response:', data);
           alert('Грешка при стартиране на пробен период. Моля опитайте отново.');
         }
       } catch (error) {
