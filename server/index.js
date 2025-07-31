@@ -566,7 +566,7 @@ router.get('/api/billing/create', authenticateRequest, async (ctx) => {
     console.log('NODE_ENV:', process.env.NODE_ENV);
     
     // ВАЖНО: Този URL трябва да е добавен в Allowed redirection URLs в Partner Dashboard
-    const returnUrl = `${HOST}/api/billing/callback?shop=${ctx.state.shop}`;
+    const returnUrl = `${HOST}/api/billing/callback`;
     console.log('Billing return URL:', returnUrl);
     console.log('HOST:', HOST);
     
@@ -587,6 +587,8 @@ router.get('/api/billing/create', authenticateRequest, async (ctx) => {
       ) {
         appSubscription {
           id
+          name
+          status
         }
         confirmationUrl
         userErrors {
