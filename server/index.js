@@ -499,6 +499,7 @@ async function checkBillingOnAppLoad(ctx, next) {
     // If no valid subscription, redirect to billing
     if (!hasValidSubscription) {
       console.log('No active subscription found, redirecting to billing');
+      console.log('Redirect URL:', `/?billing=required&shop=${shop}`);
       ctx.redirect(`/?billing=required&shop=${shop}`);
       return;
     }
@@ -799,7 +800,7 @@ router.get('(/)', async (ctx) => {
   console.log('=== MAIN ROUTE ===');
   const shop = ctx.query.shop;
   const host = ctx.query.host;
-  const billingRequired = ctx.query.billing === 'required';
+  let billingRequired = ctx.query.billing === 'required';
   
   console.log('Shop:', shop);
   console.log('Host:', host);
@@ -871,16 +872,24 @@ router.get('(/)', async (ctx) => {
         // If no valid subscription, redirect to billing
         if (!hasValidSubscription) {
           console.log('No active subscription found, redirecting to billing');
+          console.log('Redirect URL:', `/?billing=required&shop=${shop}`);
           ctx.redirect(`/?billing=required&shop=${shop}`);
           return;
         }
         
         console.log('Active subscription found, continuing...');
+      } else {
+        console.log('No valid session found, showing billing modal as fallback');
+        // Fallback: show billing modal even without session
+        ctx.query.billing = 'required';
+        billingRequired = true;
       }
     } catch (error) {
       console.error('Billing check error:', error);
       // On error, show billing prompt
       console.log('Error during billing check, showing billing modal');
+      ctx.query.billing = 'required';
+      billingRequired = true;
     }
   }
   
