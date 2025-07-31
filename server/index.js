@@ -576,8 +576,8 @@ router.get('/api/billing/create', authenticateRequest, async (ctx) => {
         lineItems: [{
           plan: {
             appRecurringPricingDetails: {
-              price: { amount: 14.99, currencyCode: "USD" }
-              interval: "EVERY_30_DAYS"
+              price: { amount: 14.99, currencyCode: USD }
+              interval: EVERY_30_DAYS
             }
           }
         }]
