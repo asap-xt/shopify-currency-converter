@@ -381,7 +381,7 @@ async function authenticateRequest(ctx, next) {
   await next();
 }
 
-// Billing check middleware - ВАЖНО: Трябва да се изпълнява при всяко зареждане
+// Billing check middleware for main route
 async function checkBillingOnAppLoad(ctx, next) {
   // Skip billing check for auth and callback routes
   if (ctx.path === '/auth' || ctx.path === '/auth/callback' || ctx.path.startsWith('/api/billing')) {
@@ -455,6 +455,65 @@ async function checkBillingOnAppLoad(ctx, next) {
     console.error('Billing check error:', error);
     // On error, allow access but show billing prompt
     ctx.state.showBillingPrompt = true;
+    await next();
+  }
+}
+
+// Billing check middleware for API endpoints
+async function requiresSubscription(ctx, next) {
+  try {
+    const client = new GraphqlClient({
+      domain: ctx.state.shop,
+      accessToken: ctx.state.session.accessToken,
+    });
+    
+    // Check for active subscriptions
+    const response = await client.query({
+      data: `{
+        currentAppInstallation {
+          activeSubscriptions {
+            id
+            status
+            trialDays
+            createdAt
+          }
+        }
+      }`
+    });
+    
+    const subscriptions = response.body.data.currentAppInstallation.activeSubscriptions || [];
+    
+    // Check for valid subscription
+    const hasValidSubscription = subscriptions.some(sub => {
+      if (sub.status === 'ACTIVE') return true;
+      
+      if (sub.status === 'PENDING' && sub.trialDays > 0) {
+        const trialEndDate = new Date(sub.createdAt);
+        trialEndDate.setDate(trialEndDate.getDate() + sub.trialDays);
+        return new Date() < trialEndDate;
+      }
+      
+      return false;
+    });
+    
+    ctx.state.hasActiveSubscription = hasValidSubscription;
+    
+    // Always allow access to billing endpoints
+    if (ctx.path.includes('/api/billing') || ctx.path.includes('/api/subscription')) {
+      await next();
+      return;
+    }
+    
+    // Check if needs subscription
+    if (!hasValidSubscription && ctx.path !== '/') {
+      ctx.redirect('/?billing=required');
+      return;
+    }
+    
+    await next();
+  } catch (error) {
+    console.error('Subscription check error:', error);
+    // Allow access on error to prevent blocking
     await next();
   }
 }
