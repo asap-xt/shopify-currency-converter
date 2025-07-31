@@ -739,6 +739,10 @@ router.get('(/)', checkBillingOnAppLoad, async (ctx) => {
   const host = ctx.query.host;
   const billingRequired = ctx.query.billing === 'required';
   
+  console.log('Shop:', shop);
+  console.log('Host:', host);
+  console.log('Billing required:', billingRequired);
+  
   if (!shop) {
     ctx.body = "Missing shop parameter. Please install the app through Shopify.";
     ctx.status = 400;
@@ -748,6 +752,9 @@ router.get('(/)', checkBillingOnAppLoad, async (ctx) => {
   // Check if we have a valid session
   const sessions = await memorySessionStorage.findSessionsByShop(shop);
   const session = sessions.find(s => !s.isOnline);
+  
+  console.log('Session found:', !!session);
+  console.log('Session has access token:', !!(session && session.accessToken));
   
   ctx.set('Content-Type', 'text/html');
   ctx.body = `
