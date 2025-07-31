@@ -554,7 +554,7 @@ router.get('/api/billing/create', authenticateRequest, async (ctx) => {
       data: `mutation {
         appSubscriptionCreate(
           name: "BGN/EUR Price Display",
-          trialDays: 5,
+          trialDays: 0,
           test: ${TEST_MODE},
           returnUrl: "${returnUrl}",
           lineItems: [{
