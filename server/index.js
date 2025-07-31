@@ -1411,7 +1411,7 @@ router.get('(/)', async (ctx) => {
     
     async function loadAppData() {
       try {
-        const response = await fetch('/api/shop?shop=${shop}');
+        const response = await fetch('/api/shop?shop=' + shop);
         if (response.ok) {
           const data = await response.json();
           console.log('Shop data loaded:', data);
@@ -1426,7 +1426,7 @@ router.get('(/)', async (ctx) => {
           
           // ВАЖНО: Показваме billing при redirect
           if (response.status === 302 || response.redirected) {
-            showBillingPrompt();
+            // showBillingPrompt(); // This function is now disabled
           }
         }
       } catch (error) {
@@ -1438,47 +1438,30 @@ router.get('(/)', async (ctx) => {
     
     async function checkBillingStatus() {
       try {
-        const response = await fetch('/api/billing/status?shop=${shop}');
+        const response = await fetch('/api/billing/status?shop=' + shop);
         if (response.ok) {
           const data = await response.json();
           billingStatus = data.hasActiveSubscription;
           
           if (!billingStatus) {
-            showBillingPrompt(); // Показваме prompt ако няма активен план
+            // Don't show old billing prompt - use new modal instead
+            console.log('No active subscription, but new modal should handle this');
           }
         } else if (response.status === 302) {
-          // Ако сме redirected, показваме billing prompt
-          showBillingPrompt();
+          // Don't show old billing prompt - use new modal instead
+          console.log('Redirected, but new modal should handle this');
         }
       } catch (error) {
         console.error('Error checking billing:', error);
-        // При грешка също показваме billing prompt
-        showBillingPrompt();
+        // Don't show old billing prompt - use new modal instead
+        console.log('Error during billing check, but new modal should handle this');
       }
     }
     
+    // Disable the old yellow billing prompt
     function showBillingPrompt() {
-      const billingPrompt = \`
-        <div style="background: #fff3cd; border: 2px solid #ffc107; border-radius: 8px; padding: 24px; margin-bottom: 24px; text-align: center;">
-          <h3 style="margin: 0 0 16px 0; color: #856404;">🎁 Започнете 5-дневен безплатен пробен период</h3>
-          <p style="margin: 0 0 20px 0; color: #856404;">
-            След пробния период: $14.99/месец<br>
-            Можете да отмените по всяко време
-          </p>
-          <button onclick="startBilling()" class="big-button" style="background: #ffc107; color: #212529;">
-            Започни безплатен пробен период
-          </button>
-        </div>
-      \`;
-      
-      // Insert billing prompt before main content
-      const container = document.querySelector('.container');
-      const header = document.querySelector('.header');
-      header.insertAdjacentHTML('afterend', billingPrompt);
-      
-      // Hide main functionality
-      document.querySelector('.quick-action').style.opacity = '0.5';
-      document.querySelector('.quick-action').style.pointerEvents = 'none';
+      console.log('Old billing prompt disabled - using new modal instead');
+      // This function is now disabled to prevent double billing modals
     }
     
     async function startBilling() {
