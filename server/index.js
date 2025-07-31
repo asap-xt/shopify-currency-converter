@@ -1332,13 +1332,32 @@ router.get('(/)', checkBillingOnAppLoad, async (ctx) => {
     
     async function startBilling() {
       try {
-        const response = await fetch('/api/billing/create?shop=${shop}');
-        const data = await response.json();
+        console.log('Starting billing request...');
+        const response = await fetch('/api/billing/create?shop=' + shop);
+        console.log('Response status:', response.status);
+        console.log('Response headers:', response.headers);
+        
+        const responseText = await response.text();
+        console.log('Response text:', responseText);
+        
+        if (!response.ok) {
+          throw new Error('HTTP ' + response.status + ': ' + responseText);
+        }
+        
+        let data;
+        try {
+          data = JSON.parse(responseText);
+        } catch (parseError) {
+          console.error('JSON parse error:', parseError);
+          throw new Error('Invalid JSON response: ' + responseText);
+        }
         
         if (data.confirmationUrl) {
           // ВАЖНО: Пренасочваме към Shopify billing page
+          console.log('Redirecting to:', data.confirmationUrl);
           window.top.location.href = data.confirmationUrl;
         } else {
+          console.error('No confirmation URL in response:', data);
           alert('Грешка при стартиране на пробен период. Моля опитайте отново.');
         }
       } catch (error) {
