@@ -320,6 +320,7 @@ async function authenticateRequest(ctx, next) {
       const tokenExchangeResult = await shopify.auth.tokenExchange({
         shop: shop,
         sessionToken: encodedSessionToken,
+        requestedTokenType: 'urn:ietf:params:oauth:token-type:offline-access-token',
       });
       
       console.log('Token exchange successful');
@@ -327,31 +328,22 @@ async function authenticateRequest(ctx, next) {
       console.log('Scope:', tokenExchangeResult.scope);
       
       const sessionId = `offline_${shop}`;
-      session = new Session({
+      session = {
         id: sessionId,
         shop: shop,
         state: 'active',
         isOnline: false,
         accessToken: tokenExchangeResult.accessToken,
         scope: tokenExchangeResult.scope,
-      });
+        expires: null,
+        onlineAccessInfo: null
+      };
       
-      await memorySessionStorage.storeSession(session);
-      console.log('Session stored with ID:', sessionId);
-      
-    } catch (error) {
-      console.error('Token exchange failed:', error);
-      ctx.status = 500;
-      ctx.body = 'Token exchange failed';
-      return;
-    }
-  }
-  
-  ctx.state.shop = shop;
-  ctx.state.session = session;
-  
-  await next();
-}
+      // Проверяваме дали наистина има token
+      if (!session.accessToken) {
+        console.error('WARNING: No access token in token exchange result!');
+        console.error('Token exchange result:', tokenExchangeResult);
+      }
 
 // Billing check middleware - SIMPLIFIED FOR MANAGED PRICING
 async function requiresSubscription(ctx, next) {
