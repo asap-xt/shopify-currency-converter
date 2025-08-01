@@ -220,48 +220,6 @@ function redirectToSessionTokenBouncePage(ctx) {
   ctx.redirect(`/session-token-bounce?${searchParams.toString()}`);
 }
 
-// Helper function to redirect to the Shopify managed billing page
-const redirectToBillingPage = (ctx) => {
-    const { shop } = ctx.state;
-    const { host } = ctx.query;
-    
-    // Уверете се, че този app handle съвпада с този във вашия Partner Dashboard
-    const appHandle = 'bgn2eur-price-display'; 
-    const storeHandle = shop.replace('.myshopify.com', '');
-    const planSelectionUrl = `https://admin.shopify.com/store/${storeHandle}/charges/${appHandle}/pricing_plans`;
-
-    console.log(`Redirecting to billing page: ${planSelectionUrl}`);
-
-    // Използваме App Bridge за надеждно пренасочване извън iframe
-    ctx.set('Content-Type', 'text/html');
-    ctx.body = `
-      <!DOCTYPE html>
-      <html>
-        <head>
-          <meta charset="utf-8">
-          <title>Select a plan</title>
-          <meta name="shopify-api-key" content="${SHOPIFY_API_KEY}" />
-          <script src="https://cdn.shopify.com/shopifycloud/app-bridge.js"></script>
-          <script>
-            document.addEventListener('DOMContentLoaded', () => {
-              const app = AppBridge.create({
-                apiKey: "${SHOPIFY_API_KEY}",
-                host: "${host}",
-              });
-
-              AppBridge.actions.Redirect.create(app).dispatch(
-                AppBridge.actions.Redirect.Action.REMOTE,
-                '${planSelectionUrl}'
-              );
-            });
-          </script>
-        </head>
-        <body>
-          <p>Redirecting to plan selection...</p>
-        </body>
-      </html>`;
-};
-
 // Session token bounce page
 router.get('/session-token-bounce', async (ctx) => {
   ctx.set('Content-Type', 'text/html');
@@ -395,10 +353,130 @@ async function authenticateRequest(ctx, next) {
   await next();
 }
 
-// Billing check middleware - SIMPLIFIED FOR MANAGED PRICING
+// Billing check middleware - UPDATED FOR MANAGED PRICING
+async function requiresSubscription(ctx, next) {
+  try {
+    const client = new shopify.clients.Graphql({
+      session: ctx.state.session,
+    });
+    
+    const response = await client.query({
+      data: `{
+        currentAppInstallation {
+          activeSubscriptions {
+            id
+            status
+            name
+            test
+          }
+        }
+      }`
+    });
+    
+    const subscriptions = response.body.data.currentAppInstallation.activeSubscriptions || [];
+    const hasActiveSubscription = subscriptions.some(sub => 
+      sub.status === 'ACTIVE' || sub.status === 'PENDING'
+    );
+    
+    ctx.state.hasActiveSubscription = hasActiveSubscription;
+    
+    // Allow billing status check always
+    if (ctx.path === '/api/billing/status') {
+      await next();
+      return;
+    }
+    
+    // For main route, check subscription
+    if (ctx.path === '/' && !hasActiveSubscription) {
+      const shop = ctx.state.shop;
+      const storeHandle = shop.replace('.myshopify.com', '');
+      const appHandle = 'bgn2eur-price-display';
+      
+      const planSelectionUrl = `https://admin.shopify.com/store/${storeHandle}/charges/${appHandle}/pricing_plans`;
+      
+      // Use App Bridge for redirect if in iframe
+      if (ctx.headers['sec-fetch-dest'] === 'iframe') {
+        ctx.set('Content-Type', 'text/html');
+        ctx.body = `
+          <!DOCTYPE html>
+          <html>
+          <head>
+            <meta charset="utf-8">
+            <title>Redirecting to billing...</title>
+            <meta name="shopify-api-key" content="${SHOPIFY_API_KEY}" />
+            <script src="https://cdn.shopify.com/shopifycloud/app-bridge.js"></script>
+          </head>
+          <body>
+            <script>
+              var AppBridge = window['app-bridge'];
+              var actions = AppBridge.actions;
+              var createApp = AppBridge.default;
+              var app = createApp({
+                apiKey: '${SHOPIFY_API_KEY}',
+                host: '${ctx.query.host || ''}'
+              });
+              var redirect = actions.Redirect.create(app);
+              redirect.dispatch(actions.Redirect.Action.REMOTE, '${planSelectionUrl}');
+            </script>
+          </body>
+          </html>
+        `;
+      } else {
+        // Standard redirect if not in iframe
+        ctx.redirect(planSelectionUrl);
+      }
+      return;
+    }
+    
+    await next();
+  } catch (error) {
+    console.error('Subscription check error:', error);
+    await next();
+  }
+}
 
+// Simplified billing callback for managed pricing
+router.get('/api/billing/callback', authenticateRequest, async (ctx) => {
+  // Managed pricing handles everything, just redirect back
+  ctx.redirect('/');
+});
 
-
+// Check subscription status endpoint
+router.get('/api/billing/status', authenticateRequest, async (ctx) => {
+  try {
+    const client = new shopify.clients.Graphql({
+      session: ctx.state.session,
+    });
+    
+    const response = await client.query({
+      data: `{
+        currentAppInstallation {
+          activeSubscriptions {
+            id
+            status
+            name
+            test
+          }
+        }
+      }`
+    });
+    
+    const subscriptions = response.body.data.currentAppInstallation.activeSubscriptions || [];
+    const hasActiveSubscription = subscriptions.some(sub => 
+      sub.status === 'ACTIVE' || sub.status === 'PENDING'
+    );
+    
+    ctx.body = {
+      hasActiveSubscription,
+      subscriptions,
+      shop: ctx.state.shop
+    };
+  } catch (error) {
+    console.error('Billing status error:', error);
+    ctx.status = 500;
+    ctx.body = { error: error.message };
+  }
+});
 
 // API endpoints
 router.get('/api/test', authenticateRequest, async (ctx) => {
@@ -439,94 +517,21 @@ router.get('/api/shop', authenticateRequest, requiresSubscription, async (ctx) =
   }
 });
 
-router.get('/api/orders', authenticateRequest, requiresSubscription, async (ctx) => {
-  console.log('=== ORDERS API TEST ===');
+// Main app route - with subscription check
+router.get('(/)', authenticateRequest, requiresSubscription, async (ctx) => {
+  console.log('=== MAIN ROUTE ===');
+  const shop = ctx.query.shop;
+  const host = ctx.query.host;
   
-  try {
-    const response = await fetch(`https://${ctx.state.shop}/admin/api/2024-10/orders.json?limit=10`, {
-      headers: { 
-        'X-Shopify-Access-Token': ctx.state.session.accessToken,
-        'Content-Type': 'application/json'
-      }
-    });
-    
-    if (!response.ok) {
-      throw new Error(`Shopify API error: ${response.status}`);
-    }
-    
-    const orders = await response.json();
-    ctx.body = {
-      success: true,
-      shop: ctx.state.shop,
-      ordersCount: orders.orders?.length || 0,
-      orders: orders.orders || []
-    };
-    
-  } catch (error) {
-    console.error('Error fetching orders:', error);
-    ctx.status = 500;
-    ctx.body = 'Failed to fetch orders: ' + error.message;
+  if (!shop) {
+    ctx.body = "Missing shop parameter. Please install the app through Shopify.";
+    ctx.status = 400;
+    return;
   }
-});
-
-router.get('(/)', authenticateRequest, async (ctx) => {
-    console.log('--- Main Route - Checking Billing Status ---');
-    const { session } = ctx.state;
-
-    let hasActiveSubscription = false;
-    try {
-        const client = new shopify.clients.Graphql({ session });
-        const response = await client.query({
-            data: `{
-                currentAppInstallation {
-                    activeSubscriptions {
-                        name
-                        status
-                        test
-                    }
-                }
-            }`,
-        });
-
-        const subscriptions = response.body.data.currentAppInstallation.activeSubscriptions || [];
-        console.log(`Found ${subscriptions.length} subscriptions.`);
-        
-        hasActiveSubscription = subscriptions.some(sub => 
-            sub.status === 'ACTIVE' || sub.status === 'PENDING'
-        );
-        
-        // За development stores, тестовите абонаменти също се считат за активни.
-        if (!hasActiveSubscription) {
-             const isTestCharge = subscriptions.some(sub => sub.test === true);
-             if (isTestCharge) {
-                console.log("Active test subscription found for development store.");
-                hasActiveSubscription = true;
-             }
-        }
-        console.log(`Has active subscription: ${hasActiveSubscription}`);
-
-    } catch (error) {
-        console.error('CRITICAL: Failed to check for active subscriptions:', error.message);
-        ctx.status = 500;
-        ctx.set('Content-Type', 'text/html');
-        ctx.body = `
-            <div style="font-family: sans-serif; padding: 2em;">
-                <h1>Error</h1>
-                <p>Could not check your app subscription status. Please try reloading the page.</p>
-            </div>
-        `;
-        return;
-    }
-
-    if (!hasActiveSubscription) {
-        // Няма активен план, пренасочваме към страницата за избор на план.
-        return redirectToBillingPage(ctx);
-    }
-
-    // Потребителят има активен абонамент, зареждаме основния интерфейс на приложението.
-    console.log('User has an active subscription. Loading app UI.');
-    ctx.set('Content-Type', 'text/html');
-    ctx.body = `
+  
+  // Нормално зареждане на приложението
+  ctx.set('Content-Type', 'text/html');
+  ctx.body = `
 <!DOCTYPE html>
 <html>
 <head>
@@ -799,7 +804,7 @@ router.get('(/)', authenticateRequest, async (ctx) => {
     <div class="quick-action">
       <h3>Бърз старт</h3>
       <p style="margin-bottom: 20px;">Инсталирайте extension-а с едно кликване:</p>
-      <a href="https://${ctx.state.shop}/admin/themes/current/editor?context=checkout&template=checkout" 
+      <a href="https://${shop}/admin/themes/current/editor?context=checkout&template=checkout" 
          class="big-button" 
          target="_blank">
         Отвори Theme Editor
@@ -885,7 +890,7 @@ router.get('(/)', authenticateRequest, async (ctx) => {
   <script>
     async function loadAppData() {
       try {
-        const response = await fetch('/api/shop?shop=${ctx.query.shop}');
+        const response = await fetch('/api/shop?shop=${shop}');
         if (response.ok) {
           const data = await response.json();
           console.log('Shop data loaded:', data);
