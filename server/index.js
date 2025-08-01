@@ -67,8 +67,8 @@ const shopify = shopifyApi({
   hostName: HOST_NAME,
   apiVersion: '2024-10',
   isEmbeddedApp: true,
-  sessionStorage: memorySessionStorage,
-});
+    sessionStorage: memorySessionStorage,
+  });
 
 const app = new Koa();
 app.keys = [SHOPIFY_API_SECRET];
@@ -122,9 +122,9 @@ router.post('/webhooks/customers/data_request', async (ctx) => {
       console.log('HMAC validation failed');
       ctx.status = 401;
       ctx.body = 'Unauthorized';
-      return;
-    }
-    
+    return;
+  }
+  
     console.log('Customer data request received');
     ctx.status = 200;
     ctx.body = { message: 'No customer data stored' };
@@ -154,7 +154,7 @@ router.post('/webhooks/customers/redact', async (ctx) => {
     if (hash !== hmacHeader) {
       ctx.status = 401;
       ctx.body = 'Unauthorized';
-      return;
+        return;
     }
     
     console.log('Customer redact request received');
@@ -242,12 +242,12 @@ router.get('/auth/callback', async (ctx) => {
   try {
     const { shop, host, charge_id } = ctx.query;
     
-    if (!shop) {
-      ctx.status = 400;
-      ctx.body = 'Missing shop parameter';
-      return;
-    }
-    
+        if (!shop) {
+            ctx.status = 400;
+            ctx.body = 'Missing shop parameter';
+            return;
+        }
+        
     // Ако идваме от billing callback
     if (charge_id) {
       console.log('Coming from billing, charge_id:', charge_id);
@@ -258,9 +258,9 @@ router.get('/auth/callback', async (ctx) => {
     // При нова инсталация, винаги проверяваме за план
     ctx.redirect(`/?shop=${shop}&host=${host || ''}&check_billing=true`);
     
-  } catch (error) {
+    } catch (error) {
     console.error('Auth callback error:', error);
-    ctx.status = 500;
+        ctx.status = 500;
     ctx.body = 'Authentication failed';
   }
 });
@@ -280,15 +280,15 @@ async function authenticateRequest(ctx, next) {
       const isDocumentRequest = !ctx.headers['authorization'];
       if (isDocumentRequest) {
         redirectToSessionTokenBouncePage(ctx);
-        return;
-      }
-      
-      ctx.status = 401;
+            return;
+        }
+        
+            ctx.status = 401;
       ctx.set('X-Shopify-Retry-Invalid-Session-Request', '1');
       ctx.body = 'Unauthorized';
-      return;
-    }
-    
+            return;
+        }
+        
     decodedSessionToken = await shopify.session.decodeSessionToken(encodedSessionToken);
     console.log('Session token decoded:', { dest: decodedSessionToken.dest, iss: decodedSessionToken.iss });
     
@@ -318,7 +318,7 @@ async function authenticateRequest(ctx, next) {
     
     try {
       const tokenExchangeResult = await shopify.auth.tokenExchange({
-        shop: shop,
+            shop: shop,
         sessionToken: encodedSessionToken,
         requestedTokenType: 'urn:ietf:params:oauth:token-type:offline-access-token',
       });
@@ -375,9 +375,9 @@ async function requiresSubscription(ctx, next) {
     // Allow billing status check always
     if (ctx.path === '/api/billing/status') {
       await next();
-      return;
-    }
-    
+            return;
+        }
+        
     // For main route, check subscription
     if (ctx.path === '/' && !hasActiveSubscription) {
       const shop = ctx.state.shop;
@@ -408,9 +408,9 @@ async function requiresSubscription(ctx, next) {
         </body>
         </html>
       `;
-      return;
-    }
-    
+            return;
+        }
+        
     await next();
   } catch (error) {
     console.error('Subscription check error:', error);
@@ -447,15 +447,15 @@ router.get('/api/billing/status', authenticateRequest, async (ctx) => {
     const hasActiveSubscription = subscriptions.some(sub => 
       sub.status === 'ACTIVE' || sub.status === 'PENDING'
     );
-    
-    ctx.body = {
+        
+        ctx.body = {
       hasActiveSubscription,
       subscriptions,
       shop: ctx.state.shop
     };
-  } catch (error) {
+    } catch (error) {
     console.error('Billing status error:', error);
-    ctx.status = 500;
+        ctx.status = 500;
     ctx.body = { error: error.message };
   }
 });
@@ -476,27 +476,27 @@ router.get('/api/shop', authenticateRequest, requiresSubscription, async (ctx) =
   
   try {
     const response = await fetch(`https://${ctx.state.shop}/admin/api/2024-10/shop.json`, {
-      headers: { 
+            headers: { 
         'X-Shopify-Access-Token': ctx.state.session.accessToken,
-        'Content-Type': 'application/json'
-      }
-    });
-    
-    if (!response.ok) {
+                'Content-Type': 'application/json'
+            }
+        });
+        
+        if (!response.ok) {
       throw new Error(`Shopify API error: ${response.status}`);
-    }
-    
-    const shopData = await response.json();
-    ctx.body = {
-      success: true,
+        }
+        
+        const shopData = await response.json();
+        ctx.body = {
+            success: true,
       shop: shopData.shop
-    };
-    
-  } catch (error) {
-    console.error('Error fetching shop info:', error);
-    ctx.status = 500;
-    ctx.body = 'Failed to fetch shop info: ' + error.message;
-  }
+        };
+        
+    } catch (error) {
+        console.error('Error fetching shop info:', error);
+        ctx.status = 500;
+        ctx.body = 'Failed to fetch shop info: ' + error.message;
+    }
 });
 
 router.get('/api/orders', authenticateRequest, requiresSubscription, async (ctx) => {
@@ -504,27 +504,27 @@ router.get('/api/orders', authenticateRequest, requiresSubscription, async (ctx)
   
   try {
     const response = await fetch(`https://${ctx.state.shop}/admin/api/2024-10/orders.json?limit=10`, {
-      headers: { 
+                    headers: { 
         'X-Shopify-Access-Token': ctx.state.session.accessToken,
-        'Content-Type': 'application/json'
-      }
-    });
-    
+                        'Content-Type': 'application/json'
+                    }
+                });
+                
     if (!response.ok) {
       throw new Error(`Shopify API error: ${response.status}`);
     }
     
     const orders = await response.json();
-    ctx.body = {
+        ctx.body = {
       success: true,
       shop: ctx.state.shop,
       ordersCount: orders.orders?.length || 0,
       orders: orders.orders || []
-    };
-    
-  } catch (error) {
+        };
+        
+    } catch (error) {
     console.error('Error fetching orders:', error);
-    ctx.status = 500;
+        ctx.status = 500;
     ctx.body = 'Failed to fetch orders: ' + error.message;
   }
 });
@@ -532,15 +532,15 @@ router.get('/api/orders', authenticateRequest, requiresSubscription, async (ctx)
 // Main app route - with subscription check
 router.get('(/)', authenticateRequest, async (ctx) => {
   console.log('=== MAIN ROUTE ===');
-  const shop = ctx.query.shop;
+        const shop = ctx.query.shop;
   const host = ctx.query.host;
   
-  if (!shop) {
+        if (!shop) {
     ctx.body = "Missing shop parameter. Please install the app through Shopify.";
-    ctx.status = 400;
-    return;
-  }
-  
+            ctx.status = 400;
+            return;
+        }
+        
   // Проверка за subscription при първо зареждане
   try {
     const client = new shopify.clients.Graphql({
@@ -630,7 +630,7 @@ router.get('(/)', authenticateRequest, async (ctx) => {
         </body>
         </html>
       `;
-      return;
+            return;
     }
   } catch (error) {
     console.error('Subscription check error:', error);
@@ -1008,7 +1008,7 @@ router.get('(/)', authenticateRequest, async (ctx) => {
           console.error('Failed to load shop data');
           document.getElementById('loading').innerHTML = 'Грешка при зареждане';
         }
-      } catch (error) {
+    } catch (error) {
         console.error('Error loading app data:', error);
         document.getElementById('loading').innerHTML = 'Грешка при зареждане';
       }
@@ -1047,9 +1047,9 @@ router.get('/debug', async (ctx) => {
       hasToken: !!session.accessToken && session.accessToken !== 'placeholder',
       scope: session.scope
     });
-  }
-  
-  ctx.body = {
+        }
+        
+        ctx.body = {
     message: 'Debug info',
     timestamp: new Date().toISOString(),
     environment: {
@@ -1082,9 +1082,9 @@ router.get('/debug/billing/:shop', async (ctx) => {
           hasToken: !!s.accessToken
         }))
       };
-      return;
-    }
-    
+            return;
+        }
+
     const client = new shopify.clients.Graphql({
       session: offlineSession,
     });
