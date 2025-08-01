@@ -220,6 +220,48 @@ function redirectToSessionTokenBouncePage(ctx) {
   ctx.redirect(`/session-token-bounce?${searchParams.toString()}`);
 }
 
+// Helper function to redirect to the Shopify managed billing page
+const redirectToBillingPage = (ctx) => {
+    const { shop } = ctx.state;
+    const { host } = ctx.query;
+    
+    // Уверете се, че този app handle съвпада с този във вашия Partner Dashboard
+    const appHandle = 'bgn2eur-price-display'; 
+    const storeHandle = shop.replace('.myshopify.com', '');
+    const planSelectionUrl = `https://admin.shopify.com/store/${storeHandle}/charges/${appHandle}/pricing_plans`;
+
+    console.log(`Redirecting to billing page: ${planSelectionUrl}`);
+
+    // Използваме App Bridge за надеждно пренасочване извън iframe
+    ctx.set('Content-Type', 'text/html');
+    ctx.body = `
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <meta charset="utf-8">
+          <title>Select a plan</title>
+          <meta name="shopify-api-key" content="${SHOPIFY_API_KEY}" />
+          <script src="https://cdn.shopify.com/shopifycloud/app-bridge.js"></script>
+          <script>
+            document.addEventListener('DOMContentLoaded', () => {
+              const app = AppBridge.create({
+                apiKey: "${SHOPIFY_API_KEY}",
+                host: "${host}",
+              });
+
+              AppBridge.actions.Redirect.create(app).dispatch(
+                AppBridge.actions.Redirect.Action.REMOTE,
+                '${planSelectionUrl}'
+              );
+            });
+          </script>
+        </head>
+        <body>
+          <p>Redirecting to plan selection...</p>
+        </body>
+      </html>`;
+};
+
 // Session token bounce page
 router.get('/session-token-bounce', async (ctx) => {
   ctx.set('Content-Type', 'text/html');
@@ -354,119 +396,9 @@ async function authenticateRequest(ctx, next) {
 }
 
 // Billing check middleware - SIMPLIFIED FOR MANAGED PRICING
-async function requiresSubscription(ctx, next) {
-  try {
-    // Използваме shopify instance вместо да импортираме GraphqlClient
-    const client = new shopify.clients.Graphql({
-      session: ctx.state.session,
-    });
-    
-    const response = await client.query({
-      data: `{
-        currentAppInstallation {
-          activeSubscriptions {
-            id
-            status
-            name
-          }
-        }
-      }`
-    });
-    
-    const subscriptions = response.body.data.currentAppInstallation.activeSubscriptions || [];
-    const hasActiveSubscription = subscriptions.some(sub => 
-      sub.status === 'ACTIVE' || sub.status === 'PENDING'
-    );
-    
-    ctx.state.hasActiveSubscription = hasActiveSubscription;
-    
-    // Allow billing status check always
-    if (ctx.path === '/api/billing/status') {
-      await next();
-      return;
-    }
-    
-    // For main route, check subscription
-    if (ctx.path === '/' && !hasActiveSubscription) {
-      const shop = ctx.state.shop;
-      const storeHandle = shop.replace('.myshopify.com', '');
-      const appHandle = 'bgn2eur-price-display';
-      
-      const planSelectionUrl = `https://admin.shopify.com/store/${storeHandle}/charges/${appHandle}/pricing_plans`;
-      
-      ctx.set('Content-Type', 'text/html');
-      ctx.body = `
-        <!DOCTYPE html>
-        <html>
-        <head>
-          <meta charset="utf-8">
-          <title>Redirecting to billing...</title>
-          <meta name="shopify-api-key" content="${SHOPIFY_API_KEY}" />
-          <script src="https://cdn.shopify.com/shopifycloud/app-bridge.js"></script>
-        </head>
-        <body>
-          <script>
-            if (window.top !== window) {
-              window.top.location.href = '${planSelectionUrl}';
-            } else {
-              window.location.href = '${planSelectionUrl}';
-            }
-          </script>
-          <p>Redirecting to billing page...</p>
-        </body>
-        </html>
-      `;
-      return;
-    }
-    
-    await next();
-  } catch (error) {
-    console.error('Subscription check error:', error);
-    await next();
-  }
-}
 
-// Simplified billing callback for managed pricing
-router.get('/api/billing/callback', authenticateRequest, async (ctx) => {
-  // Managed pricing handles everything, just redirect back
-  ctx.redirect('/');
-});
 
-// Check subscription status endpoint
-router.get('/api/billing/status', authenticateRequest, async (ctx) => {
-  try {
-    const client = new shopify.clients.Graphql({
-      session: ctx.state.session,
-    });
-    
-    const response = await client.query({
-      data: `{
-        currentAppInstallation {
-          activeSubscriptions {
-            id
-            status
-            name
-          }
-        }
-      }`
-    });
-    
-    const subscriptions = response.body.data.currentAppInstallation.activeSubscriptions || [];
-    const hasActiveSubscription = subscriptions.some(sub => 
-      sub.status === 'ACTIVE' || sub.status === 'PENDING'
-    );
-    
-    ctx.body = {
-      hasActiveSubscription,
-      subscriptions,
-      shop: ctx.state.shop
-    };
-  } catch (error) {
-    console.error('Billing status error:', error);
-    ctx.status = 500;
-    ctx.body = { error: error.message };
-  }
-});
+
 
 // API endpoints
 router.get('/api/test', authenticateRequest, async (ctx) => {
@@ -537,117 +469,460 @@ router.get('/api/orders', authenticateRequest, requiresSubscription, async (ctx)
   }
 });
 
-// Main app route - with subscription check
 router.get('(/)', authenticateRequest, async (ctx) => {
-  console.log('=== MAIN ROUTE ===');
-  const shop = ctx.query.shop;
-  const host = ctx.query.host;
-  
-  if (!shop) {
-    ctx.body = "Missing shop parameter. Please install the app through Shopify.";
-    ctx.status = 400;
-    return;
-  }
-  
-  // Проверка за subscription при първо зареждане
-  try {
-    const client = new shopify.clients.Graphql({
-      session: ctx.state.session,
-    });
-    
-    const response = await client.query({
-      data: `{
-        currentAppInstallation {
-          id
-          activeSubscriptions {
-            id
-            status
-            name
-          }
+    console.log('--- Main Route - Checking Billing Status ---');
+    const { session } = ctx.state;
+
+    let hasActiveSubscription = false;
+    try {
+        const client = new shopify.clients.Graphql({ session });
+        const response = await client.query({
+            data: `{
+                currentAppInstallation {
+                    activeSubscriptions {
+                        name
+                        status
+                        test
+                    }
+                }
+            }`,
+        });
+
+        const subscriptions = response.body.data.currentAppInstallation.activeSubscriptions || [];
+        console.log(`Found ${subscriptions.length} subscriptions.`);
+        
+        hasActiveSubscription = subscriptions.some(sub => 
+            sub.status === 'ACTIVE' || sub.status === 'PENDING'
+        );
+        
+        // За development stores, тестовите абонаменти също се считат за активни.
+        if (!hasActiveSubscription) {
+             const isTestCharge = subscriptions.some(sub => sub.test === true);
+             if (isTestCharge) {
+                console.log("Active test subscription found for development store.");
+                hasActiveSubscription = true;
+             }
         }
-      }`
-    });
-    
-    const subscriptions = response.body.data.currentAppInstallation.activeSubscriptions || [];
-    const hasActiveSubscription = subscriptions.some(sub => 
-      sub.status === 'ACTIVE' || sub.status === 'PENDING'
-    );
-    
-    console.log('Subscription check:', { 
-      hasActiveSubscription, 
-      subscriptionsCount: subscriptions.length 
-    });
-    
-    // Ако няма subscription И това е нова инсталация или проверяваме billing
-    if (!hasActiveSubscription && (ctx.query.check_billing === 'true' || ctx.query.billing !== 'declined')) {
-      const storeHandle = shop.replace('.myshopify.com', '');
-      const appHandle = 'bgn2eur-price-display';
-      
-      const planSelectionUrl = `https://admin.shopify.com/store/${storeHandle}/charges/${appHandle}/pricing_plans`;
-      
-      console.log('No subscription found, redirecting to plan selection:', planSelectionUrl);
-      
-      // ВАЖНО: Използваме meta refresh за да излезем от iframe
-      ctx.set('Content-Type', 'text/html');
-      ctx.body = `
-        <!DOCTYPE html>
-        <html>
-        <head>
-          <meta charset="utf-8">
-          <title>Select a plan - BGN/EUR Price Display</title>
-          <meta http-equiv="refresh" content="0; url=${planSelectionUrl}">
-          <meta name="shopify-api-key" content="${SHOPIFY_API_KEY}" />
-          <script src="https://cdn.shopify.com/shopifycloud/app-bridge.js"></script>
-        </head>
-        <body>
-          <div style="text-align: center; padding: 50px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;">
-            <h2>Select a plan to continue</h2>
-            <p>Redirecting to plan selection...</p>
-            <p style="margin-top: 20px;">
-              <a href="${planSelectionUrl}" style="color: #2C6ECB;">Click here if not redirected automatically</a>
-            </p>
-          </div>
-          <script>
-            // Backup redirect methods
-            setTimeout(function() {
-              // Try parent redirect first
-              if (window.parent && window.parent !== window) {
-                window.parent.location.href = '${planSelectionUrl}';
-              } else {
-                window.location.href = '${planSelectionUrl}';
-              }
-            }, 1000);
-            
-            // App Bridge redirect as final backup
-            setTimeout(function() {
-              try {
-                var AppBridge = window['app-bridge'];
-                var actions = AppBridge.actions;
-                var createApp = AppBridge.default;
-                var app = createApp({
-                  apiKey: '${SHOPIFY_API_KEY}',
-                  host: '${host || ''}'
-                });
-                var redirect = actions.Redirect.create(app);
-                redirect.dispatch(actions.Redirect.Action.REMOTE, '${planSelectionUrl}');
-              } catch (e) {
-                console.error('App Bridge redirect failed:', e);
-              }
-            }, 2000);
-          </script>
-        </body>
-        </html>
-      `;
-      return;
+        console.log(`Has active subscription: ${hasActiveSubscription}`);
+
+    } catch (error) {
+        console.error('CRITICAL: Failed to check for active subscriptions:', error.message);
+        ctx.status = 500;
+        ctx.set('Content-Type', 'text/html');
+        ctx.body = `
+            <div style="font-family: sans-serif; padding: 2em;">
+                <h1>Error</h1>
+                <p>Could not check your app subscription status. Please try reloading the page.</p>
+            </div>
+        `;
+        return;
     }
-  } catch (error) {
-    console.error('Subscription check error:', error);
-    // При грешка продължаваме с зареждането
-  }
+
+    if (!hasActiveSubscription) {
+        // Няма активен план, пренасочваме към страницата за избор на план.
+        return redirectToBillingPage(ctx);
+    }
+
+    // Потребителят има активен абонамент, зареждаме основния интерфейс на приложението.
+    console.log('User has an active subscription. Loading app UI.');
+    ctx.set('Content-Type', 'text/html');
+    ctx.body = `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>BGN/EUR Price Display</title>
+  <meta name="shopify-api-key" content="${SHOPIFY_API_KEY}" />
+  <script src="https://cdn.shopify.com/shopifycloud/app-bridge.js"></script>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      margin: 0;
+      padding: 0;
+      background: #fafafa;
+      color: #202223;
+    }
+    .container {
+      max-width: 900px;
+      margin: 0 auto;
+      padding: 20px;
+    }
+    .header {
+      background: white;
+      border-radius: 8px;
+      padding: 40px;
+      text-align: center;
+      margin-bottom: 24px;
+      border: 1px solid #e1e3e5;
+    }
+    .header h1 {
+      margin: 0 0 12px 0;
+      font-size: 32px;
+      font-weight: 500;
+      color: #202223;
+    }
+    .header p {
+      color: #616161;
+      margin: 0;
+      font-size: 16px;
+      line-height: 1.5;
+    }
+    .card {
+      background: white;
+      border-radius: 8px;
+      padding: 32px;
+      margin-bottom: 24px;
+      border: 1px solid #e1e3e5;
+    }
+    .card h2 {
+      margin: 0 0 24px 0;
+      font-size: 24px;
+      font-weight: 500;
+      color: #202223;
+    }
+    .tabs {
+      display: flex;
+      gap: 32px;
+      margin-bottom: 0;
+      background: white;
+      border-radius: 8px 8px 0 0;
+      padding: 0 32px;
+      border: 1px solid #e1e3e5;
+      border-bottom: none;
+    }
+    .tab {
+      padding: 20px 0;
+      background: none;
+      border: none;
+      font-size: 15px;
+      font-weight: 400;
+      color: #616161;
+      cursor: pointer;
+      position: relative;
+      transition: color 0.2s;
+    }
+    .tab:hover {
+      color: #202223;
+    }
+    .tab.active {
+      color: #202223;
+      font-weight: 500;
+    }
+    .tab.active::after {
+      content: '';
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      height: 2px;
+      background: #202223;
+    }
+    .tab-content {
+      display: none;
+      animation: fadeIn 0.3s;
+    }
+    .tab-content.active {
+      display: block;
+    }
+    @keyframes fadeIn {
+      from { opacity: 0; }
+      to { opacity: 1; }
+    }
+    .quick-action {
+      background: white;
+      border: 1px solid #e1e3e5;
+      border-radius: 8px;
+      padding: 32px;
+      text-align: center;
+      margin-bottom: 24px;
+    }
+    .quick-action h3 {
+      margin: 0 0 12px 0;
+      font-size: 20px;
+      font-weight: 500;
+      color: #202223;
+    }
+    .big-button {
+      display: inline-block;
+      padding: 12px 24px;
+      background: #202223;
+      color: white;
+      text-decoration: none;
+      border-radius: 6px;
+      font-weight: 500;
+      font-size: 15px;
+      transition: all 0.2s;
+    }
+    .big-button:hover {
+      background: #000;
+      transform: translateY(-1px);
+    }
+    .steps {
+      counter-reset: step-counter;
+      list-style: none;
+      padding: 0;
+      margin: 0;
+    }
+    .steps li {
+      margin-bottom: 20px;
+      padding-left: 48px;
+      position: relative;
+      counter-increment: step-counter;
+      line-height: 1.6;
+    }
+    .steps li::before {
+      content: counter(step-counter);
+      position: absolute;
+      left: 0;
+      top: 2px;
+      width: 32px;
+      height: 32px;
+      background: #f3f4f6;
+      color: #202223;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 500;
+      font-size: 14px;
+    }
+    .feature-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+      gap: 24px;
+      margin-top: 24px;
+    }
+    .feature {
+      padding: 20px 0;
+      border-bottom: 1px solid #f3f4f6;
+    }
+    .feature:last-child {
+      border-bottom: none;
+    }
+    .feature-text h3 {
+      margin: 0 0 8px 0;
+      font-size: 16px;
+      font-weight: 500;
+      color: #202223;
+    }
+    .feature-text p {
+      margin: 0;
+      color: #616161;
+      font-size: 14px;
+      line-height: 1.5;
+    }
+    .badge {
+      display: inline-block;
+      padding: 4px 12px;
+      background: #f3f4f6;
+      border-radius: 4px;
+      font-size: 12px;
+      font-weight: 500;
+      color: #616161;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    .badge.new {
+      background: #202223;
+      color: white;
+    }
+    .warning {
+      background: #f9fafb;
+      border: 1px solid #e1e3e5;
+      border-radius: 6px;
+      padding: 20px;
+      margin: 24px 0;
+      line-height: 1.6;
+    }
+    .button {
+      display: inline-block;
+      padding: 10px 20px;
+      background: #202223;
+      color: white;
+      text-decoration: none;
+      border-radius: 6px;
+      font-weight: 500;
+      margin-top: 16px;
+      transition: background 0.2s;
+    }
+    .button:hover {
+      background: #000;
+    }
+    .footer {
+      text-align: center;
+      color: #616161;
+      font-size: 14px;
+      margin-top: 40px;
+      line-height: 1.6;
+    }
+    code {
+      background: #f3f4f6;
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-family: monospace;
+      font-size: 14px;
+    }
+    .loading {
+      text-align: center;
+      padding: 40px;
+      color: #666;
+      display: none;
+    }
+    .success-badge {
+      display: inline-block;
+      background: #108043;
+      color: white;
+      padding: 4px 12px;
+      border-radius: 4px;
+      font-size: 12px;
+      margin-left: 8px;
+    }
+    ul {
+      line-height: 1.8;
+    }
+    strong {
+      font-weight: 500;
+      color: #202223;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>BGN/EUR Price Display</h1>
+      <p>Показвайте цените в лева и евро на Thank You страницата</p>
+      <div class="loading" id="loading">Зареждане...</div>
+      <span id="status-badge" style="display: none;" class="success-badge">✓ Активно</span>
+    </div>
+
+    <div class="quick-action">
+      <h3>Бърз старт</h3>
+      <p style="margin-bottom: 20px;">Инсталирайте extension-а с едно кликване:</p>
+      <a href="https://${ctx.state.shop}/admin/themes/current/editor?context=checkout&template=checkout" 
+         class="big-button" 
+         target="_blank">
+        Отвори Theme Editor
+      </a>
+    </div>
+
+    <div class="tabs">
+      <button class="tab active" onclick="showTab('installation')">Инсталация</button>
+      <button class="tab" onclick="showTab('features')">Функции</button>
+      <button class="tab" onclick="showTab('tips')">Съвети</button>
+    </div>
+
+    <div class="card">
+      <div id="installation" class="tab-content active">
+        <h2>Инструкции за инсталация</h2>
+        <ol class="steps">
+          <li>
+            <strong>Отидете в Theme Customizer</strong><br>
+            <span style="color: #616161;">Online Store → Themes → Customize</span>
+          </li>
+          <li>
+            <strong>Навигирайте до Thank You страницата</strong><br>
+            <span style="color: #616161;">Settings → Checkout → Thank you page</span>
+          </li>
+          <li>
+            <strong>Добавете приложението</strong><br>
+            <span style="color: #616161;">Add block → Apps → BGN EUR Price Display</span>
+          </li>
+          <li>
+            <strong>Запазете промените</strong><br>
+            <span style="color: #616161;">Кликнете Save в горния десен ъгъл</span>
+          </li>
+        </ol>
+      </div>
+
+      <div id="features" class="tab-content">
+        <h2>Как работи</h2>
+        <div class="feature-grid">
+          <div class="feature">
+            <div class="feature-text">
+              <h3>Двойно показване</h3>
+              <p>Всички цени се показват едновременно в BGN и EUR, изчислени по фиксиран курс 1 EUR = 1.95583 BGN</p>
+            </div>
+          </div>
+          <div class="feature">
+            <div class="feature-text">
+              <h3>Автоматично преминаване към EUR</h3>
+              <p>След 01.01.2026 г. когато смените валутата на магазина (или на пазара България)  на евро, приложението автоматично ще показва EUR като основна валута и BGN като референтна.</p>
+            </div>
+          </div>
+          <div class="feature">
+            <div class="feature-text">
+              <h3>Пълна разбивка</h3>
+              <p>Включва всички елементи на поръчката - продукти, доставка и обща сума</p>
+            </div>
+          </div>
+        </div>
+        
+        <div class="warning">
+          <div>
+            <strong>Важно:</strong> В настройките на магазина трябва да имате България като отделен пазар. Цените в BGN/EUR се показват само за поръчки в български лева (BGN) с адрес на доставка в България.
+          </div>
+        </div>
+      </div>
+
+      <div id="tips" class="tab-content">
+        <h2>Полезни съвети</h2>
+        <ul style="margin: 0; padding-left: 20px;">
+          <li>Уверете се, че валутата на магазина е настроена на BGN</li>
+          <li>Тествайте с реална поръчка за да видите как изглежда</li>
+          <li>При проблеми, опитайте да деинсталирате и инсталирате отново</li>
+          <li>Проверете дали extension-а е активен в Theme Customizer</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="footer">
+      <p>BGN/EUR Prices Display v1.0 • Създадено за български онлайн магазини</p>
+      <p style="margin-top: 8px;">Нужда от помощ? Свържете се с нас на emarketingbg@gmail.com</p>
+    </div>
+  </div>
   
-  // Нормално зареждане на приложението
-  ctx.set('Content-Type', 'text/html');
-  ctx.body = `
+  <script>
+    async function loadAppData() {
+      try {
+        const response = await fetch('/api/shop?shop=${ctx.query.shop}');
+        if (response.ok) {
+          const data = await response.json();
+          console.log('Shop data loaded:', data);
+          document.getElementById('loading').style.display = 'none';
+          document.getElementById('status-badge').style.display = 'inline-block';
+        } else {
+          console.error('Failed to load shop data');
+          document.getElementById('loading').innerHTML = 'Грешка при зареждане';
+        }
+      } catch (error) {
+        console.error('Error loading app data:', error);
+        document.getElementById('loading').innerHTML = 'Грешка при зареждане';
+      }
+    }
+    
+    function showTab(tabName) {
+      // Hide all tabs
+      document.querySelectorAll('.tab-content').forEach(content => {
+        content.classList.remove('active');
+      });
+      document.querySelectorAll('.tab').forEach(tab => {
+        tab.classList.remove('active');
+      });
+      
+      // Show selected tab
+      document.getElementById(tabName).classList.add('active');
+      event.target.classList.add('active');
+    }
+    
+    // Load app data after page loads
+    setTimeout(loadAppData, 1000);
+  </script>
+</body>
+</html>
+  `;
+});
+
 <!DOCTYPE html>
 <html>
 <head>
