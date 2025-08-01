@@ -8,6 +8,10 @@ import crypto from 'crypto';
 import getRawBody from 'raw-body';
 import { shopifyApi, LATEST_API_VERSION, Session, GraphqlClient } from '@shopify/shopify-api';
 
+// Environment and test mode configuration
+const NODE_ENV = process.env.NODE_ENV || 'development';
+const TEST_MODE = NODE_ENV !== 'production';
+
 // Environment check
 console.log('=== Environment Variables Check ===');
 console.log('NODE_ENV:', NODE_ENV);
@@ -55,10 +59,6 @@ const {
   HOST,
   HOST_NAME
 } = process.env;
-
-// Environment and test mode configuration
-const NODE_ENV = process.env.NODE_ENV || 'development';
-const TEST_MODE = NODE_ENV !== 'production';
 
 // Validation
 if (!SHOPIFY_API_KEY || !SHOPIFY_API_SECRET || !SCOPES || (!HOST && !HOST_NAME)) {
