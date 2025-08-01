@@ -311,12 +311,18 @@ async function authenticateRequest(ctx, next) {
   const shop = dest.hostname;
   
   const sessions = await memorySessionStorage.findSessionsByShop(shop);
+  console.log('Found sessions for shop:', shop, 'Count:', sessions.length);
+  sessions.forEach(s => {
+    console.log('Session:', { id: s.id, isOnline: s.isOnline, hasAccessToken: !!s.accessToken });
+  });
+  
   let session = sessions.find(s => !s.isOnline);
   
   if (!session || !session.accessToken || session.accessToken === 'placeholder') {
     console.log('No valid session with access token, performing token exchange...');
     
     try {
+      console.log('Starting token exchange for shop:', shop);
       const tokenExchangeResult = await shopify.auth.tokenExchange({
         shop: shop,
         sessionToken: encodedSessionToken,
@@ -325,6 +331,13 @@ async function authenticateRequest(ctx, next) {
       console.log('Token exchange successful');
       console.log('Access token received:', tokenExchangeResult.accessToken ? 'Yes' : 'No');
       console.log('Scope:', tokenExchangeResult.scope);
+      
+      if (!tokenExchangeResult.accessToken) {
+        console.error('Token exchange succeeded but no access token received');
+        ctx.status = 500;
+        ctx.body = 'Token exchange failed - no access token';
+        return;
+      }
       
       const sessionId = `offline_${shop}`;
       session = new Session({
@@ -338,9 +351,27 @@ async function authenticateRequest(ctx, next) {
       
       await memorySessionStorage.storeSession(session);
       console.log('Session stored with ID:', sessionId);
+      console.log('Session details:', {
+        id: session.id,
+        shop: session.shop,
+        hasAccessToken: !!session.accessToken,
+        scope: session.scope
+      });
+      
+      // Verify session was stored correctly
+      const storedSession = await memorySessionStorage.loadSession(sessionId);
+      console.log('Stored session verification:', {
+        found: !!storedSession,
+        hasAccessToken: !!storedSession?.accessToken,
+        accessTokenLength: storedSession?.accessToken?.length
+      });
       
     } catch (error) {
       console.error('Token exchange failed:', error);
+      console.error('Error details:', {
+        message: error.message,
+        stack: error.stack
+      });
       ctx.status = 500;
       ctx.body = 'Token exchange failed';
       return;
@@ -350,34 +381,108 @@ async function authenticateRequest(ctx, next) {
   ctx.state.shop = shop;
   ctx.state.session = session;
   
+  console.log('Session set in ctx.state:', {
+    shop: ctx.state.shop,
+    sessionId: ctx.state.session?.id,
+    hasAccessToken: !!ctx.state.session?.accessToken
+  });
+  
   await next();
 }
 
 // Billing check middleware - UPDATED FOR MANAGED PRICING
 async function requiresSubscription(ctx, next) {
   try {
-    const client = new shopify.clients.Graphql({
-      session: ctx.state.session,
+    // Check if session exists and has access token
+    if (!ctx.state.session) {
+      console.error('No session found in ctx.state');
+      ctx.status = 500;
+      ctx.body = 'Session not found';
+      return;
+    }
+    
+    if (!ctx.state.session.accessToken || ctx.state.session.accessToken === 'placeholder') {
+      console.error('Session missing access token:', {
+        sessionId: ctx.state.session.id,
+        hasAccessToken: !!ctx.state.session.accessToken,
+        accessToken: ctx.state.session.accessToken,
+        accessTokenLength: ctx.state.session.accessToken?.length
+      });
+      ctx.status = 500;
+      ctx.body = 'Session missing access token';
+      return;
+    }
+    
+    // Additional check for valid access token format
+    if (typeof ctx.state.session.accessToken !== 'string' || ctx.state.session.accessToken.length < 10) {
+      console.error('Invalid access token format:', {
+        sessionId: ctx.state.session.id,
+        accessTokenType: typeof ctx.state.session.accessToken,
+        accessTokenLength: ctx.state.session.accessToken?.length
+      });
+      ctx.status = 500;
+      ctx.body = 'Invalid access token format';
+      return;
+    }
+    
+    console.log('Creating GraphQL client with session:', {
+      sessionId: ctx.state.session.id,
+      shop: ctx.state.session.shop,
+      hasAccessToken: !!ctx.state.session.accessToken
     });
     
-    const response = await client.query({
-      data: `{
-        currentAppInstallation {
-          activeSubscriptions {
-            id
-            status
-            name
-            test
+    let client;
+    try {
+      client = new shopify.clients.Graphql({
+        session: ctx.state.session,
+      });
+      console.log('GraphQL client created successfully');
+    } catch (error) {
+      console.error('Failed to create GraphQL client:', error);
+      ctx.status = 500;
+      ctx.body = 'Failed to create GraphQL client';
+      return;
+    }
+    
+    console.log('Executing GraphQL query for subscription check...');
+    let response;
+    try {
+      response = await client.query({
+        data: `{
+          currentAppInstallation {
+            activeSubscriptions {
+              id
+              status
+              name
+              test
+            }
           }
-        }
-      }`
-    });
+        }`
+      });
+      console.log('GraphQL query executed successfully');
+    } catch (error) {
+      console.error('GraphQL query failed:', error);
+      console.error('Error details:', {
+        message: error.message,
+        statusCode: error.response?.statusCode,
+        body: error.response?.body
+      });
+      ctx.status = 500;
+      ctx.body = 'GraphQL query failed';
+      return;
+    }
     
     const subscriptions = response.body.data.currentAppInstallation.activeSubscriptions || [];
+    console.log('Found subscriptions:', subscriptions.length);
+    subscriptions.forEach(sub => {
+      console.log('Subscription:', { id: sub.id, status: sub.status, name: sub.name, test: sub.test });
+    });
+    
     const hasActiveSubscription = subscriptions.some(sub => 
       sub.status === 'ACTIVE' || sub.status === 'PENDING'
     );
     
+    console.log('Has active subscription:', hasActiveSubscription);
     ctx.state.hasActiveSubscription = hasActiveSubscription;
     
     // Allow billing status check always
