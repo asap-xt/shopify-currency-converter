@@ -1416,23 +1416,30 @@ router.get('(/)', async (ctx) => {
           const data = await response.json();
           console.log('Shop data loaded:', data);
           document.getElementById('loading').style.display = 'none';
-          document.getElementById('status-badge').style.display = 'inline-block';
           
-          // Check billing status
-          checkBillingStatus();
+          // Only show "Активно" if we have a real active subscription
+          const billingStatusResponse = await fetch('/api/billing/status?shop=' + shop);
+          if (billingStatusResponse.ok) {
+            const billingData = await billingStatusResponse.json();
+            if (billingData.hasActiveSubscription) {
+              document.getElementById('status-badge').style.display = 'inline-block';
+              console.log('Active subscription found - showing Активно badge');
+            } else {
+              console.log('No active subscription - hiding Активно badge');
+              document.getElementById('status-badge').style.display = 'none';
+            }
+          } else {
+            console.log('Could not check billing status - hiding Активно badge');
+            document.getElementById('status-badge').style.display = 'none';
+          }
         } else {
           console.error('Failed to load shop data');
           document.getElementById('loading').innerHTML = 'Грешка при зареждане';
-          
-          // ВАЖНО: Показваме billing при redirect
-          if (response.status === 302 || response.redirected) {
-            // showBillingPrompt(); // This function is now disabled
-          }
+          document.getElementById('status-badge').style.display = 'none';
         }
       } catch (error) {
         console.error('Error loading app data:', error);
-        // При мрежова грешка също проверяваме billing
-        checkBillingStatus();
+        document.getElementById('status-badge').style.display = 'none';
       }
     }
     
@@ -1488,19 +1495,23 @@ router.get('(/)', async (ctx) => {
         
         if (data.confirmationUrl) {
           // ВАЖНО: Пренасочваме към Shopify billing page
-          console.log('Redirecting to:', data.confirmationUrl);
+          console.log('Redirecting to Shopify billing page:', data.confirmationUrl);
           window.top.location.href = data.confirmationUrl;
         } else if (data.authUrl) {
           // OAuth redirect needed
           console.log('OAuth redirect needed, redirecting to:', data.authUrl);
           window.top.location.href = data.authUrl;
+        } else if (data.error) {
+          // Show specific error message
+          console.error('Billing error:', data.error);
+          alert('Грешка при стартиране на пробен период: ' + data.error);
         } else {
           console.error('No confirmation URL or auth URL in response:', data);
           alert('Грешка при стартиране на пробен период. Моля опитайте отново.');
         }
       } catch (error) {
         console.error('Billing error:', error);
-        alert('Грешка при стартиране на пробен период. Моля опитайте отново.');
+        alert('Грешка при стартиране на пробен период: ' + error.message);
       }
     }
     
