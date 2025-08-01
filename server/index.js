@@ -409,7 +409,7 @@ async function requiresSubscription(ctx, next) {
         </html>
       `;
       return;
-    });
+    }
     
     await next();
   } catch (error) {
