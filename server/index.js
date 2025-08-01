@@ -10,6 +10,8 @@ import { shopifyApi, LATEST_API_VERSION, Session, GraphqlClient } from '@shopify
 
 // Environment check
 console.log('=== Environment Variables Check ===');
+console.log('NODE_ENV:', NODE_ENV);
+console.log('TEST_MODE:', TEST_MODE);
 console.log('SHOPIFY_API_KEY:', process.env.SHOPIFY_API_KEY ? 'SET' : 'MISSING');
 console.log('SHOPIFY_API_SECRET:', process.env.SHOPIFY_API_SECRET ? 'SET' : 'MISSING');
 console.log('SCOPES:', process.env.SCOPES);
@@ -54,6 +56,10 @@ const {
   HOST_NAME
 } = process.env;
 
+// Environment and test mode configuration
+const NODE_ENV = process.env.NODE_ENV || 'development';
+const TEST_MODE = NODE_ENV !== 'production';
+
 // Validation
 if (!SHOPIFY_API_KEY || !SHOPIFY_API_SECRET || !SCOPES || (!HOST && !HOST_NAME)) {
   console.error('FATAL: Missing required environment variables!');
@@ -67,12 +73,31 @@ if (!SHOPIFY_API_KEY || !SHOPIFY_API_SECRET || !SCOPES || (!HOST && !HOST_NAME))
   process.exit(1);
 }
 
+// Validate required scopes for public apps
+const requiredScopes = [
+  'read_products',
+  'write_products', 
+  'read_orders',
+  'write_orders',
+  'read_app_subscriptions',
+  'write_app_subscriptions'
+];
+
+const currentScopes = SCOPES.split(',');
+const missingScopes = requiredScopes.filter(scope => !currentScopes.includes(scope));
+
+if (missingScopes.length > 0) {
+  console.error('WARNING: Missing required scopes for public app:', missingScopes);
+  console.error('Current scopes:', currentScopes);
+  console.error('Required scopes for public app:', requiredScopes);
+}
+
 // Initialize Shopify API
 const shopify = shopifyApi({
   apiKey: SHOPIFY_API_KEY,
   apiSecretKey: SHOPIFY_API_SECRET,
   scopes: SCOPES.split(','),
-  hostName: HOST_NAME || HOST,
+  hostName: HOST_NAME || HOST.replace(/^https?:\/\//, ''), // Remove protocol
   apiVersion: '2024-10',
   isEmbeddedApp: true,
   sessionStorage: memorySessionStorage,
@@ -390,6 +415,8 @@ async function authenticateRequest(ctx, next) {
         sessionToken: encodedSessionToken,
         // For managed install, we need to specify the app type
         isOnline: false,
+        // Add test mode for development
+        test: TEST_MODE,
       });
       
       console.log('Token exchange successful');
@@ -1160,9 +1187,11 @@ router.get('/debug', async (ctx) => {
       apiKey: SHOPIFY_API_KEY ? 'SET' : 'NOT SET',
       apiSecretKey: SHOPIFY_API_SECRET ? 'SET' : 'NOT SET',
       scopes: SCOPES.split(','),
-      hostName: HOST_NAME || HOST,
+      hostName: HOST_NAME || HOST.replace(/^https?:\/\//, ''),
       isEmbeddedApp: true,
-      useOnlineTokens: false
+      useOnlineTokens: false,
+      nodeEnv: NODE_ENV,
+      testMode: TEST_MODE
     }
   };
 });
