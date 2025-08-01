@@ -610,17 +610,19 @@ router.get('/api/billing/create', authenticateRequest, async (ctx) => {
   console.log('Has access token:', !!ctx.state.session?.accessToken);
   console.log('Access token value:', ctx.state.session?.accessToken);
   
-  // Check if session exists
-  if (!ctx.state.session) {
-    console.log('No session object found');
-    ctx.status = 500;
-    ctx.body = { error: 'No session found. Please authenticate first.' };
-    return;
+  // Load current session using Shopify API
+  let session;
+  try {
+    session = await shopify.session.loadCurrentSession(ctx.req, ctx.res, false); // false for offline sessions
+    console.log('Loaded session:', session);
+  } catch (error) {
+    console.error('Error loading session:', error);
+    session = null;
   }
   
-  // If no access token, redirect to OAuth
-  if (!ctx.state.session.accessToken) {
-    console.log('No access token, redirecting to OAuth');
+  // Check if session exists
+  if (!session || !session.accessToken) {
+    console.log('No valid session found, redirecting to OAuth');
     const authUrl = `https://${ctx.state.shop}/admin/oauth/authorize?` + 
       `client_id=${SHOPIFY_API_KEY}&` +
       `scope=${SCOPES}&` +
@@ -636,20 +638,12 @@ router.get('/api/billing/create', authenticateRequest, async (ctx) => {
   }
   
   try {
-    // Check if we have a valid access token
-    if (!ctx.state.session.accessToken) {
-      console.log('No access token available for GraphQL client');
-      ctx.status = 500;
-      ctx.body = { error: 'No access token available. Please authenticate first.' };
-      return;
-    }
-    
     console.log('Creating GraphqlClient with access token...');
     
     // Use the correct method to create GraphQL client
     const client = new shopify.clients.Graphql({
-      domain: ctx.state.shop,
-      accessToken: ctx.state.session.accessToken,
+      domain: session.shop,
+      accessToken: session.accessToken,
     });
     
     const TEST_MODE = process.env.NODE_ENV !== 'production';
@@ -657,7 +651,7 @@ router.get('/api/billing/create', authenticateRequest, async (ctx) => {
     console.log('NODE_ENV:', process.env.NODE_ENV);
     
     // ВАЖНО: Този URL трябва да е добавен в Allowed redirection URLs в Partner Dashboard
-    const returnUrl = `${HOST}/api/billing/callback?shop=${ctx.state.shop}`;
+    const returnUrl = `${HOST}/api/billing/callback?shop=${session.shop}`;
     console.log('Billing return URL:', returnUrl);
     console.log('HOST:', HOST);
     
