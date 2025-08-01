@@ -98,7 +98,7 @@ const shopify = shopifyApi({
   apiSecretKey: SHOPIFY_API_SECRET,
   scopes: SCOPES.split(','),
   hostName: HOST_NAME || HOST.replace(/^https?:\/\//, ''), // Remove protocol
-  apiVersion: '2024-10',
+  apiVersion: LATEST_API_VERSION,
   isEmbeddedApp: true,
   sessionStorage: memorySessionStorage,
   // For public apps, we need to handle both online and offline tokens
@@ -110,6 +110,17 @@ const shopify = shopifyApi({
 });
 
 console.log('Shopify API initialized');
+console.log('Shopify API configuration:', {
+  apiKey: SHOPIFY_API_KEY ? 'SET' : 'NOT SET',
+  apiSecretKey: SHOPIFY_API_SECRET ? 'SET' : 'NOT SET',
+  scopes: SCOPES,
+  hostName: HOST_NAME || HOST.replace(/^https?:\/\//, ''),
+  apiVersion: LATEST_API_VERSION,
+  isEmbeddedApp: true,
+  useOnlineTokens: false,
+  testMode: TEST_MODE,
+  nodeEnv: NODE_ENV
+});
 
 const app = new Koa();
 app.keys = [SHOPIFY_API_SECRET];
@@ -357,6 +368,13 @@ async function authenticateRequest(ctx, next) {
   const dest = new URL(decodedSessionToken.dest);
   const shop = dest.hostname;
   
+  console.log('Shop validation:', {
+    originalDest: decodedSessionToken.dest,
+    extractedShop: shop,
+    isValidShop: shop.includes('.myshopify.com') || shop.includes('.shopify.com'),
+    shopLength: shop.length
+  });
+  
   const sessions = await memorySessionStorage.findSessionsByShop(shop);
   console.log('Found sessions for shop:', shop, 'Count:', sessions.length);
   sessions.forEach(s => {
@@ -411,17 +429,57 @@ async function authenticateRequest(ctx, next) {
       console.log('- Expected callback URL:', `${HOST_NAME || HOST}/auth/callback`);
       console.log ('shop: ' + shop); 
       console.log ('session token: ' + encodedSessionToken);
-      
-      const tokenExchangeResult = await shopify.auth.tokenExchange({
-        shop: shop,
-        sessionToken: encodedSessionToken,
-        // For managed install, we need to specify the app type
-        isOnline: false,
-        // Add test mode for development
-        test: TEST_MODE,
+      console.log ('session token validation:', {
+        length: encodedSessionToken.length,
+        startsWith: encodedSessionToken.substring(0, 10),
+        containsDots: (encodedSessionToken.match(/\./g) || []).length,
+        isValidFormat: /^[A-Za-z0-9+/=]+$/.test(encodedSessionToken)
       });
       
-      console.log('Token exchange successful');
+      console.log('Token exchange parameters:', {
+        shop: shop,
+        sessionTokenLength: encodedSessionToken.length,
+        isOnline: false,
+        test: TEST_MODE,
+        apiKey: SHOPIFY_API_KEY ? 'SET' : 'NOT SET',
+        apiSecretKey: SHOPIFY_API_SECRET ? 'SET' : 'NOT SET'
+      });
+      
+      // Additional validation for token exchange
+      console.log('Token exchange validation:', {
+        shopIsValid: shop && shop.includes('.myshopify.com'),
+        sessionTokenIsValid: encodedSessionToken && encodedSessionToken.length > 100,
+        apiKeyIsSet: !!SHOPIFY_API_KEY,
+        apiSecretIsSet: !!SHOPIFY_API_SECRET,
+        scopesAreSet: !!SCOPES,
+        hostNameIsSet: !!(HOST_NAME || HOST),
+        testMode: TEST_MODE,
+        nodeEnv: NODE_ENV
+      });
+
+      let tokenExchangeResult;
+      try {
+        tokenExchangeResult = await shopify.auth.tokenExchange({
+          shop: shop,
+          sessionToken: encodedSessionToken,
+          // For public apps, we need to specify the app type
+          isOnline: false,
+          // Add test mode for development
+          test: TEST_MODE,
+        });
+        
+        console.log('Token exchange successful');
+        console.log('Raw token exchange result:', JSON.stringify(tokenExchangeResult, null, 2));
+      } catch (tokenExchangeError) {
+        console.error('Token exchange error details:', {
+          message: tokenExchangeError.message,
+          stack: tokenExchangeError.stack,
+          name: tokenExchangeError.name,
+          code: tokenExchangeError.code
+        });
+        throw tokenExchangeError;
+      }
+      
       console.log('Token exchange result:', {
         hasAccessToken: !!tokenExchangeResult.accessToken,
         accessTokenLength: tokenExchangeResult.accessToken?.length,
@@ -459,6 +517,14 @@ async function authenticateRequest(ctx, next) {
       console.error('- App is published in App Store');
       console.error('- Users install via App Store, not Partner Dashboard');
       console.error('- Check App Store listing for correct configuration');
+      console.error('');
+      console.error('TOKEN EXCHANGE TROUBLESHOOTING:');
+      console.error('1. Check if app is properly installed in the store');
+      console.error('2. Verify app scopes match required scopes');
+      console.error('3. Ensure app URL is correctly configured');
+      console.error('4. Check if session token is valid and not expired');
+      console.error('5. Verify API key and secret are correct');
+      console.error('6. Check if app is in test mode when it should be');
         ctx.status = 500;
         ctx.body = 'Token exchange failed - no access token';
         return;
@@ -481,6 +547,12 @@ async function authenticateRequest(ctx, next) {
         shop: session.shop,
         hasAccessToken: !!session.accessToken,
         scope: session.scope
+      });
+      
+      // Verify session storage is working
+      console.log('Session storage verification:', {
+        storageSize: memorySessionStorage.storage.size,
+        sessionExists: memorySessionStorage.storage.has(sessionId)
       });
       
       // Verify session was stored correctly
