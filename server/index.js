@@ -321,125 +321,118 @@ async function authenticateRequest(ctx, next) {
   await next();
 }
 
-// Billing check middleware
+// Billing check middleware - SIMPLIFIED FOR MANAGED PRICING
 async function requiresSubscription(ctx, next) {
   try {
     const client = new shopify.api.clients.Graphql({
       session: ctx.state.session,
     });
     
-    // Check for active subscriptions
     const response = await client.query({
       data: `{
         currentAppInstallation {
           activeSubscriptions {
             id
             status
-            trialDays
-            createdAt
+            name
           }
         }
       }`
     });
     
     const subscriptions = response.body.data.currentAppInstallation.activeSubscriptions || [];
-    const hasActiveSubscription = subscriptions.some(sub => sub.status === 'ACTIVE');
+    const hasActiveSubscription = subscriptions.some(sub => 
+      sub.status === 'ACTIVE' || sub.status === 'PENDING'
+    );
     
     ctx.state.hasActiveSubscription = hasActiveSubscription;
     
-    // Always allow access to billing endpoints
-    if (ctx.path.includes('/api/billing') || ctx.path.includes('/api/subscription')) {
+    // Allow billing status check always
+    if (ctx.path === '/api/billing/status') {
       await next();
       return;
     }
     
-    // Check if needs subscription
-    if (!hasActiveSubscription && ctx.path !== '/') {
-      ctx.redirect('/?billing=required');
+    // For main route, check subscription
+    if (ctx.path === '/' && !hasActiveSubscription) {
+      const shop = ctx.state.shop;
+      const storeHandle = shop.replace('.myshopify.com', '');
+      const appHandle = 'bgn-eur-price-display'; // От shopify.app.toml
+      
+      const planSelectionUrl = `https://admin.shopify.com/store/${storeHandle}/charges/${appHandle}/pricing_plans`;
+      
+      ctx.set('Content-Type', 'text/html');
+      ctx.body = `
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <meta charset="utf-8">
+          <title>Redirecting to billing...</title>
+          <meta name="shopify-api-key" content="${SHOPIFY_API_KEY}" />
+          <script src="https://cdn.shopify.com/shopifycloud/app-bridge.js"></script>
+        </head>
+        <body>
+          <script>
+            if (window.top !== window) {
+              window.top.location.href = '${planSelectionUrl}';
+            } else {
+              window.location.href = '${planSelectionUrl}';
+            }
+          </script>
+          <p>Redirecting to billing page...</p>
+        </body>
+        </html>
+      `;
       return;
     }
     
     await next();
   } catch (error) {
     console.error('Subscription check error:', error);
-    // Allow access on error to prevent blocking
     await next();
   }
 }
 
-// Billing endpoints
-router.get('/api/billing/create', authenticateRequest, async (ctx) => {
+// Simplified billing callback for managed pricing
+router.get('/api/billing/callback', authenticateRequest, async (ctx) => {
+  // Managed pricing handles everything, just redirect back
+  ctx.redirect('/');
+});
+
+// Check subscription status endpoint
+router.get('/api/billing/status', authenticateRequest, async (ctx) => {
   try {
     const client = new shopify.api.clients.Graphql({
       session: ctx.state.session,
     });
     
-    const TEST_MODE = process.env.NODE_ENV !== 'production';
-    
     const response = await client.query({
-      data: `mutation {
-        appSubscriptionCreate(
-          name: "BGN/EUR Price Display",
-          test: null,
-          trialDays: 5,
-          returnUrl: "${HOST}/api/billing/callback?shop=${ctx.state.shop}",
-          lineItems: [{
-            plan: {
-              appRecurringPricingDetails: {
-                price: { amount: 14.99, currencyCode: USD },
-                interval: EVERY_30_DAYS
-              }
-            }
-          }]
-        ) {
-          appSubscription {
+      data: `{
+        currentAppInstallation {
+          activeSubscriptions {
             id
-          }
-          confirmationUrl
-          userErrors {
-            field
-            message
+            status
+            name
           }
         }
       }`
     });
     
-    const { confirmationUrl, userErrors } = response.body.data.appSubscriptionCreate;
+    const subscriptions = response.body.data.currentAppInstallation.activeSubscriptions || [];
+    const hasActiveSubscription = subscriptions.some(sub => 
+      sub.status === 'ACTIVE' || sub.status === 'PENDING'
+    );
     
-    if (userErrors?.length > 0) {
-      console.error('Billing errors:', userErrors);
-      ctx.status = 400;
-      ctx.body = { error: userErrors[0].message };
-      return;
-    }
-    
-    ctx.body = { confirmationUrl };
+    ctx.body = {
+      hasActiveSubscription,
+      subscriptions,
+      shop: ctx.state.shop
+    };
   } catch (error) {
-    console.error('Create subscription error:', error);
+    console.error('Billing status error:', error);
     ctx.status = 500;
-    ctx.body = { error: 'Failed to create subscription' };
+    ctx.body = { error: error.message };
   }
-});
-
-router.get('/api/billing/callback', authenticateRequest, async (ctx) => {
-  const { charge_id } = ctx.query;
-  
-  if (charge_id) {
-    // Subscription was accepted
-    console.log('Subscription activated:', charge_id);
-    ctx.redirect('/?billing=success');
-  } else {
-    // Subscription was declined
-    ctx.redirect('/?billing=declined');
-  }
-});
-
-// Check subscription status endpoint
-router.get('/api/billing/status', authenticateRequest, requiresSubscription, async (ctx) => {
-  ctx.body = {
-    hasActiveSubscription: ctx.state.hasActiveSubscription,
-    shop: ctx.state.shop
-  };
 });
 
 // API endpoints
@@ -511,8 +504,8 @@ router.get('/api/orders', authenticateRequest, requiresSubscription, async (ctx)
   }
 });
 
-// Main app route
-router.get('(/)', async (ctx) => {
+// Main app route - SIMPLIFIED WITHOUT CUSTOM BILLING UI
+router.get('(/)', authenticateRequest, requiresSubscription, async (ctx) => {
   console.log('=== MAIN ROUTE ===');
   const shop = ctx.query.shop;
   const host = ctx.query.host;
@@ -881,8 +874,6 @@ router.get('(/)', async (ctx) => {
   </div>
   
   <script>
-    let billingStatus = null;
-    
     async function loadAppData() {
       try {
         const response = await fetch('/api/shop?shop=${shop}');
@@ -891,12 +882,6 @@ router.get('(/)', async (ctx) => {
           console.log('Shop data loaded:', data);
           document.getElementById('loading').style.display = 'none';
           document.getElementById('status-badge').style.display = 'inline-block';
-          
-          // Check billing status
-          checkBillingStatus();
-        } else if (response.status === 302 || response.redirected) {
-          // Redirected due to no subscription
-          showBillingPrompt();
         } else {
           console.error('Failed to load shop data');
           document.getElementById('loading').innerHTML = 'Грешка при зареждане';
@@ -904,63 +889,6 @@ router.get('(/)', async (ctx) => {
       } catch (error) {
         console.error('Error loading app data:', error);
         document.getElementById('loading').innerHTML = 'Грешка при зареждане';
-      }
-    }
-    
-    async function checkBillingStatus() {
-      try {
-        const response = await fetch('/api/billing/status?shop=${shop}');
-        if (response.ok) {
-          const data = await response.json();
-          billingStatus = data.hasActiveSubscription;
-          
-          if (!billingStatus) {
-            showBillingPrompt();
-          }
-        }
-      } catch (error) {
-        console.error('Error checking billing:', error);
-      }
-    }
-    
-    function showBillingPrompt() {
-      const billingPrompt = \`
-        <div style="background: #fff3cd; border: 2px solid #ffc107; border-radius: 8px; padding: 24px; margin-bottom: 24px; text-align: center;">
-          <h3 style="margin: 0 0 16px 0; color: #856404;">🎁 Започнете 5-дневен безплатен пробен период</h3>
-          <p style="margin: 0 0 20px 0; color: #856404;">
-            След пробния период: $14.99/месец<br>
-            Можете да отмените по всяко време
-          </p>
-          <button onclick="startBilling()" class="big-button" style="background: #ffc107; color: #212529;">
-            Започни безплатен пробен период
-          </button>
-        </div>
-      \`;
-      
-      // Insert billing prompt before main content
-      const container = document.querySelector('.container');
-      const header = document.querySelector('.header');
-      header.insertAdjacentHTML('afterend', billingPrompt);
-      
-      // Hide main functionality
-      document.querySelector('.quick-action').style.opacity = '0.5';
-      document.querySelector('.quick-action').style.pointerEvents = 'none';
-    }
-    
-    async function startBilling() {
-      try {
-        const response = await fetch('/api/billing/create?shop=${shop}');
-        const data = await response.json();
-        
-        if (data.confirmationUrl) {
-          // Redirect to Shopify billing page
-          window.top.location.href = data.confirmationUrl;
-        } else {
-          alert('Грешка при стартиране на пробен период. Моля опитайте отново.');
-        }
-      } catch (error) {
-        console.error('Billing error:', error);
-        alert('Грешка при стартиране на пробен период. Моля опитайте отново.');
       }
     }
     
@@ -978,14 +906,7 @@ router.get('(/)', async (ctx) => {
       event.target.classList.add('active');
     }
     
-    // Check URL parameters for billing status
-    const urlParams = new URLSearchParams(window.location.search);
-    if (urlParams.get('billing') === 'success') {
-      alert('🎉 Успешно активирахте плана! Вече можете да използвате всички функции.');
-    } else if (urlParams.get('billing') === 'declined') {
-      alert('❌ Плащането беше отказано. Моля опитайте отново.');
-    }
-    
+    // Load app data after page loads
     setTimeout(loadAppData, 1000);
   </script>
 </body>
