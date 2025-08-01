@@ -311,12 +311,26 @@ async function authenticateRequest(ctx, next) {
       const tokenExchangeResult = await shopify.auth.tokenExchange({
         shop: shop,
         sessionToken: encodedSessionToken,
-        requestedTokenType: 'offline_access_token',
       });
       
       console.log('Token exchange successful');
+      console.log('Token exchange result:', {
+        hasAccessToken: !!tokenExchangeResult.accessToken,
+        accessTokenLength: tokenExchangeResult.accessToken?.length,
+        scope: tokenExchangeResult.scope,
+        expires: tokenExchangeResult.expires,
+        associatedUser: tokenExchangeResult.associatedUser,
+        accountOwner: tokenExchangeResult.accountOwner
+      });
       
-      const sessionId = `${shop}_offline`;
+      if (!tokenExchangeResult.accessToken) {
+        console.error('Token exchange succeeded but no access token received');
+        ctx.status = 500;
+        ctx.body = 'Token exchange failed - no access token';
+        return;
+      }
+      
+      const sessionId = `offline_${shop}`;
       session = new Session({
         id: sessionId,
         shop: shop,
