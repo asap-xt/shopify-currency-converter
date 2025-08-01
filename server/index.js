@@ -240,7 +240,7 @@ router.get('/auth/callback', async (ctx) => {
   console.log('=== AUTH CALLBACK ===');
   
   try {
-    const { shop, host } = ctx.query;
+    const { shop, host, charge_id } = ctx.query;
     
     if (!shop) {
       ctx.status = 400;
@@ -248,14 +248,15 @@ router.get('/auth/callback', async (ctx) => {
       return;
     }
     
-    // При Managed Install, Shopify вече е създал сесия
-    // Просто проверяваме дали има активен план
+    // Ако идваме от billing callback
+    if (charge_id) {
+      console.log('Coming from billing, charge_id:', charge_id);
+      ctx.redirect(`/?shop=${shop}&host=${host || ''}&billing=success`);
+      return;
+    }
     
-    // Изчакваме малко за да се уверим че сесията е готова
-    await new Promise(resolve => setTimeout(resolve, 1000));
-    
-    // Redirect към главната страница, където ще се провери за subscription
-    ctx.redirect(`/?shop=${shop}&host=${host || ''}`);
+    // При нова инсталация, винаги проверяваме за план
+    ctx.redirect(`/?shop=${shop}&host=${host || ''}&check_billing=true`);
     
   } catch (error) {
     console.error('Auth callback error:', error);
@@ -322,8 +323,10 @@ async function authenticateRequest(ctx, next) {
       });
       
       console.log('Token exchange successful');
+      console.log('Access token received:', tokenExchangeResult.accessToken ? 'Yes' : 'No');
+      console.log('Scope:', tokenExchangeResult.scope);
       
-      const sessionId = `${shop}_offline`;
+      const sessionId = `offline_${shop}`;
       session = new Session({
         id: sessionId,
         shop: shop,
@@ -334,6 +337,7 @@ async function authenticateRequest(ctx, next) {
       });
       
       await memorySessionStorage.storeSession(session);
+      console.log('Session stored with ID:', sessionId);
       
     } catch (error) {
       console.error('Token exchange failed:', error);
@@ -352,8 +356,8 @@ async function authenticateRequest(ctx, next) {
 // Billing check middleware - SIMPLIFIED FOR MANAGED PRICING
 async function requiresSubscription(ctx, next) {
   try {
-    const { GraphqlClient } = await import('@shopify/shopify-api');
-    const client = new GraphqlClient({
+    // Използваме shopify instance вместо да импортираме GraphqlClient
+    const client = new shopify.clients.Graphql({
       session: ctx.state.session,
     });
     
@@ -431,8 +435,7 @@ router.get('/api/billing/callback', authenticateRequest, async (ctx) => {
 // Check subscription status endpoint
 router.get('/api/billing/status', authenticateRequest, async (ctx) => {
   try {
-    const { GraphqlClient } = await import('@shopify/shopify-api');
-    const client = new GraphqlClient({
+    const client = new shopify.clients.Graphql({
       session: ctx.state.session,
     });
     
@@ -548,8 +551,7 @@ router.get('(/)', authenticateRequest, async (ctx) => {
   
   // Проверка за subscription при първо зареждане
   try {
-    const { GraphqlClient } = await import('@shopify/shopify-api');
-    const client = new GraphqlClient({
+    const client = new shopify.clients.Graphql({
       session: ctx.state.session,
     });
     
@@ -576,15 +578,16 @@ router.get('(/)', authenticateRequest, async (ctx) => {
       subscriptionsCount: subscriptions.length 
     });
     
-    // Ако няма subscription И това е нова инсталация
-    if (!hasActiveSubscription && ctx.query.billing !== 'declined') {
+    // Ако няма subscription И това е нова инсталация или проверяваме billing
+    if (!hasActiveSubscription && (ctx.query.check_billing === 'true' || ctx.query.billing !== 'declined')) {
       const storeHandle = shop.replace('.myshopify.com', '');
       const appHandle = 'bgn2eur-price-display';
       
       const planSelectionUrl = `https://admin.shopify.com/store/${storeHandle}/charges/${appHandle}/pricing_plans`;
       
-      console.log('Redirecting to plan selection:', planSelectionUrl);
+      console.log('No subscription found, redirecting to plan selection:', planSelectionUrl);
       
+      // ВАЖНО: Използваме meta refresh за да излезем от iframe
       ctx.set('Content-Type', 'text/html');
       ctx.body = `
         <!DOCTYPE html>
@@ -592,34 +595,45 @@ router.get('(/)', authenticateRequest, async (ctx) => {
         <head>
           <meta charset="utf-8">
           <title>Select a plan - BGN/EUR Price Display</title>
+          <meta http-equiv="refresh" content="0; url=${planSelectionUrl}">
           <meta name="shopify-api-key" content="${SHOPIFY_API_KEY}" />
           <script src="https://cdn.shopify.com/shopifycloud/app-bridge.js"></script>
         </head>
         <body>
           <div style="text-align: center; padding: 50px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;">
-            <h2>Almost there!</h2>
-            <p>Please select a plan to continue using BGN/EUR Price Display</p>
-            <p style="color: #666;">Redirecting to plan selection...</p>
+            <h2>Select a plan to continue</h2>
+            <p>Redirecting to plan selection...</p>
+            <p style="margin-top: 20px;">
+              <a href="${planSelectionUrl}" style="color: #2C6ECB;">Click here if not redirected automatically</a>
+            </p>
           </div>
           <script>
-            var AppBridge = window['app-bridge'];
-            var actions = AppBridge.actions;
-            var createApp = AppBridge.default;
-            
-            var app = createApp({
-              apiKey: '${SHOPIFY_API_KEY}',
-              host: '${host || ''}',
-              forceRedirect: true
-            });
-            
-            var redirect = actions.Redirect.create(app);
-            
+            // Backup redirect methods
             setTimeout(function() {
-              redirect.dispatch(
-                actions.Redirect.Action.REMOTE,
-                '${planSelectionUrl}'
-              );
-            }, 1500);
+              // Try parent redirect first
+              if (window.parent && window.parent !== window) {
+                window.parent.location.href = '${planSelectionUrl}';
+              } else {
+                window.location.href = '${planSelectionUrl}';
+              }
+            }, 1000);
+            
+            // App Bridge redirect as final backup
+            setTimeout(function() {
+              try {
+                var AppBridge = window['app-bridge'];
+                var actions = AppBridge.actions;
+                var createApp = AppBridge.default;
+                var app = createApp({
+                  apiKey: '${SHOPIFY_API_KEY}',
+                  host: '${host || ''}'
+                });
+                var redirect = actions.Redirect.create(app);
+                redirect.dispatch(actions.Redirect.Action.REMOTE, '${planSelectionUrl}');
+              } catch (e) {
+                console.error('App Bridge redirect failed:', e);
+              }
+            }, 2000);
           </script>
         </body>
         </html>
@@ -1038,7 +1052,8 @@ router.get('/debug', async (ctx) => {
       id: id,
       shop: session.shop,
       isOnline: session.isOnline,
-      hasToken: !!session.accessToken && session.accessToken !== 'placeholder'
+      hasToken: !!session.accessToken && session.accessToken !== 'placeholder',
+      scope: session.scope
     });
   }
   
@@ -1051,8 +1066,67 @@ router.get('/debug', async (ctx) => {
       scopes: SCOPES,
       host: HOST
     },
-    sessions: allSessions
+    sessions: allSessions,
+    totalSessions: allSessions.length
   };
+});
+
+// Public debug endpoint за проверка на billing
+router.get('/debug/billing/:shop', async (ctx) => {
+  const shop = ctx.params.shop;
+  
+  try {
+    const sessions = await memorySessionStorage.findSessionsByShop(shop);
+    const offlineSession = sessions.find(s => !s.isOnline);
+    
+    if (!offlineSession) {
+      ctx.body = {
+        error: 'No offline session found',
+        shop: shop,
+        totalSessions: sessions.length,
+        sessionTypes: sessions.map(s => ({ 
+          id: s.id, 
+          isOnline: s.isOnline,
+          hasToken: !!s.accessToken
+        }))
+      };
+      return;
+    }
+    
+    const client = new shopify.clients.Graphql({
+      session: offlineSession,
+    });
+    
+    const response = await client.query({
+      data: `{
+        currentAppInstallation {
+          id
+          activeSubscriptions {
+            id
+            status
+            name
+            test
+            trialDays
+            createdAt
+          }
+        }
+      }`
+    });
+    
+    ctx.body = {
+      shop: shop,
+      sessionId: offlineSession.id,
+      hasToken: !!offlineSession.accessToken,
+      installation: response.body.data.currentAppInstallation
+    };
+    
+  } catch (error) {
+    ctx.status = 500;
+    ctx.body = {
+      error: error.message,
+      shop: shop
+    };
+  }
 });
 
 app.use(router.routes());
