@@ -602,7 +602,8 @@ router.get("/auth/callback", async (req, res) => {
   );
   const tokenData = await tokenResp.json();
   const accessToken = tokenData.access_token;
-
+  console.log ('tokenData: ' + tokenData);
+  console.log ('shop: ' + shop); 
   // 2. Създаваме Subscription (ако няма вече активен)
   if (!ACTIVE_SUBSCRIPTION[shop]) {
     const subscriptionResp = await fetch(
