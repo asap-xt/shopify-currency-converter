@@ -292,6 +292,14 @@ async function authenticateRequest(ctx, next) {
   const dest = new URL(decodedSessionToken.dest);
   const shop = dest.hostname;
   
+  // Fallback: use shop from query parameter if available
+  const queryShop = ctx.query.shop;
+  if (queryShop && queryShop !== shop) {
+    console.log(`Shop mismatch: session token shop (${shop}) vs query shop (${queryShop})`);
+    // Use the shop from query parameter as it's more reliable for API calls
+    shop = queryShop;
+  }
+  
   const sessions = await memorySessionStorage.findSessionsByShop(shop);
   let session = sessions.find(s => !s.isOnline);
   
@@ -652,19 +660,13 @@ router.get("/auth/callback", async (ctx) => {
 });
 
 // Main app route
-router.get('(/)', async (ctx) => {
+router.get('(/)', authenticateRequest, async (ctx) => {
   console.log('=== MAIN ROUTE ===');
-  const shop = ctx.query.shop;
+  const shop = ctx.state.shop; // Използваме shop от state вместо от query
   const host = ctx.query.host;
   
   if (!ACTIVE_SUBSCRIPTION[shop]) {
     console.log("Нямаш активен абонамент.");
-  }
-  
-  if (!shop) {
-    ctx.body = "Missing shop parameter. Please install the app through Shopify.";
-    ctx.status = 400;
-    return;
   }
   
   ctx.set('Content-Type', 'text/html');
@@ -1138,7 +1140,7 @@ router.get('(/)', async (ctx) => {
 });
 
 // Debug route
-router.get('/debug', async (ctx) => {
+router.get('/debug', authenticateRequest, async (ctx) => {
   const allSessions = [];
   for (const [id, session] of memorySessionStorage.storage) {
     allSessions.push({
@@ -1158,7 +1160,12 @@ router.get('/debug', async (ctx) => {
       scopes: SCOPES,
       host: HOST
     },
-    sessions: allSessions
+    sessions: allSessions,
+    currentShop: ctx.state.shop,
+    currentSession: {
+      id: ctx.state.session?.id,
+      hasAccessToken: !!ctx.state.session?.accessToken
+    }
   };
 });
 
