@@ -357,7 +357,7 @@ async function requiresSubscription(ctx, next) {
     if (ctx.path === '/' && !hasActiveSubscription) {
       const shop = ctx.state.shop;
       const storeHandle = shop.replace('.myshopify.com', '');
-      const appHandle = 'bgn-eur-price-display'; // От shopify.app.toml
+      const appHandle = 'bgn2eur-price-display'; // От shopify.app.toml
       
       const planSelectionUrl = `https://admin.shopify.com/store/${storeHandle}/charges/${appHandle}/pricing_plans`;
       
