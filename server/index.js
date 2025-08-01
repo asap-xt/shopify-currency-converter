@@ -8,19 +8,12 @@ import crypto from 'crypto';
 import getRawBody from 'raw-body';
 import { shopifyApi, LATEST_API_VERSION, Session, GraphqlClient } from '@shopify/shopify-api';
 
-// Environment and test mode configuration
-const NODE_ENV = process.env.NODE_ENV || 'development';
-const TEST_MODE = NODE_ENV !== 'production';
-
 // Environment check
 console.log('=== Environment Variables Check ===');
-console.log('NODE_ENV:', NODE_ENV);
-console.log('TEST_MODE:', TEST_MODE);
 console.log('SHOPIFY_API_KEY:', process.env.SHOPIFY_API_KEY ? 'SET' : 'MISSING');
 console.log('SHOPIFY_API_SECRET:', process.env.SHOPIFY_API_SECRET ? 'SET' : 'MISSING');
 console.log('SCOPES:', process.env.SCOPES);
 console.log('HOST:', process.env.HOST);
-console.log('HOST_NAME:', process.env.HOST_NAME);
 console.log('====================================');
 
 // Session storage
@@ -61,35 +54,9 @@ const {
 } = process.env;
 
 // Validation
-if (!SHOPIFY_API_KEY || !SHOPIFY_API_SECRET || !SCOPES || (!HOST && !HOST_NAME)) {
+if (!SHOPIFY_API_KEY || !SHOPIFY_API_SECRET || !SCOPES || !HOST_NAME) {
   console.error('FATAL: Missing required environment variables!');
-  console.error('Missing:', {
-    SHOPIFY_API_KEY: !SHOPIFY_API_KEY,
-    SHOPIFY_API_SECRET: !SHOPIFY_API_SECRET,
-    SCOPES: !SCOPES,
-    HOST: !HOST,
-    HOST_NAME: !HOST_NAME
-  });
   process.exit(1);
-}
-
-// Validate required scopes for public apps
-const requiredScopes = [
-  'read_products',
-  'write_products', 
-  'read_orders',
-  'write_orders',
-  'read_app_subscriptions',
-  'write_app_subscriptions'
-];
-
-const currentScopes = SCOPES.split(',');
-const missingScopes = requiredScopes.filter(scope => !currentScopes.includes(scope));
-
-if (missingScopes.length > 0) {
-  console.error('WARNING: Missing required scopes for public app:', missingScopes);
-  console.error('Current scopes:', currentScopes);
-  console.error('Required scopes for public app:', requiredScopes);
 }
 
 // Initialize Shopify API
@@ -97,29 +64,10 @@ const shopify = shopifyApi({
   apiKey: SHOPIFY_API_KEY,
   apiSecretKey: SHOPIFY_API_SECRET,
   scopes: SCOPES.split(','),
-  hostName: HOST_NAME || HOST.replace(/^https?:\/\//, ''), // Remove protocol
-  apiVersion: LATEST_API_VERSION,
+  hostName: HOST_NAME,
+  apiVersion: '2024-10',
   isEmbeddedApp: true,
   sessionStorage: memorySessionStorage,
-  // For public apps, we need to handle both online and offline tokens
-  useOnlineTokens: false,
-  // Enable managed pricing support
-  future: {
-    unstable_managedPricingSupport: true,
-  },
-});
-
-console.log('Shopify API initialized');
-console.log('Shopify API configuration:', {
-  apiKey: SHOPIFY_API_KEY ? 'SET' : 'NOT SET',
-  apiSecretKey: SHOPIFY_API_SECRET ? 'SET' : 'NOT SET',
-  scopes: SCOPES,
-  hostName: HOST_NAME || HOST.replace(/^https?:\/\//, ''),
-  apiVersion: LATEST_API_VERSION,
-  isEmbeddedApp: true,
-  useOnlineTokens: false,
-  testMode: TEST_MODE,
-  nodeEnv: NODE_ENV
 });
 
 const app = new Koa();
@@ -138,17 +86,12 @@ app.use(async (ctx, next) => {
 
 // Request logging
 app.use(async (ctx, next) => {
-  const start = Date.now();
   console.log(`${new Date().toISOString()} - ${ctx.method} ${ctx.path}`);
   try {
     await next();
-    const duration = Date.now() - start;
-    console.log(`${new Date().toISOString()} - ${ctx.method} ${ctx.path} - ${ctx.status} - ${duration}ms`);
   } catch (err) {
-    const duration = Date.now() - start;
-    console.error(`Error handling ${ctx.method} ${ctx.path} - ${duration}ms:`, err);
-    ctx.status = 500;
-    ctx.body = 'Internal Server Error';
+    console.error(`Error handling ${ctx.method} ${ctx.path}:`, err);
+    throw err;
   }
 });
 
@@ -292,40 +235,9 @@ router.get('/session-token-bounce', async (ctx) => {
   `;
 });
 
-// OAuth callback route за Managed Install
-router.get('/auth/callback', async (ctx) => {
-  console.log('=== AUTH CALLBACK ===');
-  
-  try {
-    const { shop, host, charge_id } = ctx.query;
-    
-    if (!shop) {
-      ctx.status = 400;
-      ctx.body = 'Missing shop parameter';
-      return;
-    }
-    
-    // Ако идваме от billing callback
-    if (charge_id) {
-      console.log('Coming from billing, charge_id:', charge_id);
-      ctx.redirect(`/?shop=${shop}&host=${host || ''}&billing=success`);
-      return;
-    }
-    
-    // При нова инсталация, винаги проверяваме за план
-    ctx.redirect(`/?shop=${shop}&host=${host || ''}&check_billing=true`);
-    
-  } catch (error) {
-    console.error('Auth callback error:', error);
-    ctx.status = 500;
-    ctx.body = 'Authentication failed';
-  }
-});
-
 // Middleware за автентикация чрез Token Exchange
 async function authenticateRequest(ctx, next) {
   console.log('=== AUTHENTICATING REQUEST ===');
-  const start = Date.now();
   
   let encodedSessionToken = null;
   let decodedSessionToken = null;
@@ -368,171 +280,22 @@ async function authenticateRequest(ctx, next) {
   const dest = new URL(decodedSessionToken.dest);
   const shop = dest.hostname;
   
-        console.log('Shop validation:', {
-        originalDest: decodedSessionToken.dest,
-        extractedShop: shop,
-        isValidShop: shop.includes('.myshopify.com') || shop.includes('.shopify.com'),
-        shopLength: shop.length,
-        shopParts: shop.split('.')
-      });
-  
   const sessions = await memorySessionStorage.findSessionsByShop(shop);
-  console.log('Found sessions for shop:', shop, 'Count:', sessions.length);
-  sessions.forEach(s => {
-    console.log('Session:', { id: s.id, isOnline: s.isOnline, hasAccessToken: !!s.accessToken });
-  });
-  
-  // For public apps, we need to check both online and offline sessions
-  let session = sessions.find(s => !s.isOnline); // Offline session (preferred)
-  
-  if (!session) {
-    console.log('No offline session found, checking for online session...');
-    session = sessions.find(s => s.isOnline); // Online session (fallback)
-  }
-  
-  console.log('Selected session:', {
-    id: session?.id,
-    isOnline: session?.isOnline,
-    hasAccessToken: !!session?.accessToken
-  });
+  let session = sessions.find(s => !s.isOnline);
   
   if (!session || !session.accessToken || session.accessToken === 'placeholder') {
     console.log('No valid session with access token, performing token exchange...');
     
     try {
-      console.log('Starting token exchange for shop:', shop);
-      console.log('Session token length:', encodedSessionToken.length);
-      console.log('Shopify API config:', {
-        apiKey: SHOPIFY_API_KEY ? 'SET' : 'NOT SET',
-        apiSecretKey: SHOPIFY_API_SECRET ? 'SET' : 'NOT SET',
-        scopes: SCOPES,
-        hostName: HOST_NAME,
-        parsedScopes: SCOPES.split(','),
-        requiredScopes: ['read_orders', 'write_themes', 'read_locations']
-      });
-      
-      // Check if all required scopes are present
-      const requiredScopes = ['read_orders', 'write_themes', 'read_locations'];
-      const currentScopes = SCOPES.split(',');
-      const missingScopes = requiredScopes.filter(scope => !currentScopes.includes(scope));
-      
-      if (missingScopes.length > 0) {
-        console.error('Missing required scopes:', missingScopes);
-        console.error('Current scopes:', currentScopes);
-        console.error('Please add missing scopes in Partner Dashboard');
-      }
-      
-      // Check App URL configuration
-      console.log('App URL configuration check:');
-      console.log('- Current HOST:', HOST);
-      console.log('- Current HOST_NAME:', HOST_NAME);
-      console.log('- Expected App URL in Partner Dashboard:', HOST_NAME || HOST);
-      console.log('- Expected callback URL:', `${HOST_NAME || HOST}/auth/callback`);
-      console.log ('shop: ' + shop); 
-      console.log ('session token: ' + encodedSessionToken);
-      console.log ('session token validation:', {
-        length: encodedSessionToken.length,
-        startsWith: encodedSessionToken.substring(0, 10),
-        containsDots: (encodedSessionToken.match(/\./g) || []).length,
-        isValidFormat: /^[A-Za-z0-9+/=.-]+$/.test(encodedSessionToken),
-        isJWTFormat: encodedSessionToken.split('.').length === 3
-      });
-      
-      console.log('Token exchange parameters:', {
+      const tokenExchangeResult = await shopify.auth.tokenExchange({
         shop: shop,
-        sessionTokenLength: encodedSessionToken.length,
-        isOnline: false,
-        test: TEST_MODE,
-        apiKey: SHOPIFY_API_KEY ? 'SET' : 'NOT SET',
-        apiSecretKey: SHOPIFY_API_SECRET ? 'SET' : 'NOT SET'
+        sessionToken: encodedSessionToken,
+        requestedTokenType: 'offline_access_token',
       });
       
-      // Additional validation for token exchange
-      console.log('Token exchange validation:', {
-        shopIsValid: shop && (shop.includes('.myshopify.com') || shop.includes('.shopify.com')),
-        sessionTokenIsValid: encodedSessionToken && encodedSessionToken.length > 100 && encodedSessionToken.split('.').length === 3,
-        apiKeyIsSet: !!SHOPIFY_API_KEY,
-        apiSecretIsSet: !!SHOPIFY_API_SECRET,
-        scopesAreSet: !!SCOPES,
-        hostNameIsSet: !!(HOST_NAME || HOST),
-        testMode: TEST_MODE,
-        nodeEnv: NODE_ENV
-      });
-
-      let tokenExchangeResult;
-      try {
-        tokenExchangeResult = await shopify.auth.tokenExchange({
-          shop: shop,
-          sessionToken: encodedSessionToken,
-          // For public apps, we need to specify the app type
-          isOnline: false,
-          // Add test mode for development
-          test: TEST_MODE,
-        });
-        
-        console.log('Token exchange successful');
-        console.log('Raw token exchange result:', JSON.stringify(tokenExchangeResult, null, 2));
-      } catch (tokenExchangeError) {
-        console.error('Token exchange error details:', {
-          message: tokenExchangeError.message,
-          stack: tokenExchangeError.stack,
-          name: tokenExchangeError.name,
-          code: tokenExchangeError.code
-        });
-        throw tokenExchangeError;
-      }
+      console.log('Token exchange successful');
       
-      console.log('Token exchange result:', {
-        hasAccessToken: !!tokenExchangeResult.accessToken,
-        accessTokenLength: tokenExchangeResult.accessToken?.length,
-        scope: tokenExchangeResult.scope,
-        expires: tokenExchangeResult.expires,
-        associatedUser: tokenExchangeResult.associatedUser,
-        accountOwner: tokenExchangeResult.accountOwner
-      });
-      
-      if (!tokenExchangeResult.accessToken) {
-        console.error('Token exchange succeeded but no access token received');
-        console.error('Token exchange result details:', {
-          hasAccessToken: !!tokenExchangeResult.accessToken,
-          hasScope: !!tokenExchangeResult.scope,
-          scope: tokenExchangeResult.scope,
-          expires: tokenExchangeResult.expires,
-          associatedUser: tokenExchangeResult.associatedUser,
-          accountOwner: tokenExchangeResult.accountOwner
-        });
-              console.error('This might be due to:');
-      console.error('1. App not configured for Managed Install in Partner Dashboard');
-      console.error('2. Incorrect scopes configuration');
-      console.error('3. App URL not properly configured');
-      console.error('4. App not properly installed in the store');
-      console.error('');
-      console.error('SOLUTION STEPS:');
-      console.error('1. Go to Partner Dashboard > Your App > App Setup');
-      console.error('2. Set App URL to:', HOST_NAME || HOST);
-      console.error('3. Add callback URL:', `${HOST_NAME || HOST}/auth/callback`);
-      console.error('4. Ensure all required scopes are added:', requiredScopes);
-      console.error('5. For Public Apps: Check App Store listing configuration');
-      console.error('6. Reinstall the app in your store');
-      console.error('');
-      console.error('PUBLIC APP SPECIFIC:');
-      console.error('- App is published in App Store');
-      console.error('- Users install via App Store, not Partner Dashboard');
-      console.error('- Check App Store listing for correct configuration');
-      console.error('');
-      console.error('TOKEN EXCHANGE TROUBLESHOOTING:');
-      console.error('1. Check if app is properly installed in the store');
-      console.error('2. Verify app scopes match required scopes');
-      console.error('3. Ensure app URL is correctly configured');
-      console.error('4. Check if session token is valid and not expired');
-      console.error('5. Verify API key and secret are correct');
-      console.error('6. Check if app is in test mode when it should be');
-        ctx.status = 500;
-        ctx.body = 'Token exchange failed - no access token';
-        return;
-      }
-      
-      const sessionId = `offline_${shop}`;
+      const sessionId = `${shop}_offline`;
       session = new Session({
         id: sessionId,
         shop: shop,
@@ -543,34 +306,9 @@ async function authenticateRequest(ctx, next) {
       });
       
       await memorySessionStorage.storeSession(session);
-      console.log('Session stored with ID:', sessionId);
-      console.log('Session details:', {
-        id: session.id,
-        shop: session.shop,
-        hasAccessToken: !!session.accessToken,
-        scope: session.scope
-      });
-      
-      // Verify session storage is working
-      console.log('Session storage verification:', {
-        storageSize: memorySessionStorage.storage.size,
-        sessionExists: memorySessionStorage.storage.has(sessionId)
-      });
-      
-      // Verify session was stored correctly
-      const storedSession = await memorySessionStorage.loadSession(sessionId);
-      console.log('Stored session verification:', {
-        found: !!storedSession,
-        hasAccessToken: !!storedSession?.accessToken,
-        accessTokenLength: storedSession?.accessToken?.length
-      });
       
     } catch (error) {
       console.error('Token exchange failed:', error);
-      console.error('Error details:', {
-        message: error.message,
-        stack: error.stack
-      });
       ctx.status = 500;
       ctx.body = 'Token exchange failed';
       return;
@@ -580,208 +318,128 @@ async function authenticateRequest(ctx, next) {
   ctx.state.shop = shop;
   ctx.state.session = session;
   
-  const duration = Date.now() - start;
-  console.log('Session set in ctx.state:', {
-    shop: ctx.state.shop,
-    sessionId: ctx.state.session?.id,
-    hasAccessToken: !!ctx.state.session?.accessToken,
-    duration: `${duration}ms`
-  });
-  
   await next();
 }
 
-// Billing check middleware - UPDATED FOR MANAGED PRICING
+// Billing check middleware
 async function requiresSubscription(ctx, next) {
   try {
-    // Check if session exists and has access token
-    if (!ctx.state.session) {
-      console.error('No session found in ctx.state');
-      ctx.status = 500;
-      ctx.body = 'Session not found';
-      return;
-    }
-    
-    if (!ctx.state.session.accessToken || ctx.state.session.accessToken === 'placeholder') {
-      console.error('Session missing access token:', {
-        sessionId: ctx.state.session.id,
-        hasAccessToken: !!ctx.state.session.accessToken,
-        accessToken: ctx.state.session.accessToken,
-        accessTokenLength: ctx.state.session.accessToken?.length
-      });
-      ctx.status = 500;
-      ctx.body = 'Session missing access token';
-      return;
-    }
-    
-    // Additional check for valid access token format
-    if (typeof ctx.state.session.accessToken !== 'string' || ctx.state.session.accessToken.length < 10) {
-      console.error('Invalid access token format:', {
-        sessionId: ctx.state.session.id,
-        accessTokenType: typeof ctx.state.session.accessToken,
-        accessTokenLength: ctx.state.session.accessToken?.length
-      });
-      ctx.status = 500;
-      ctx.body = 'Invalid access token format';
-      return;
-    }
-    
-    console.log('Creating GraphQL client with session:', {
-      sessionId: ctx.state.session.id,
-      shop: ctx.state.session.shop,
-      hasAccessToken: !!ctx.state.session.accessToken
-    });
-    
-    let client;
-    try {
-      client = new shopify.clients.Graphql({
-        session: ctx.state.session,
-      });
-      console.log('GraphQL client created successfully');
-    } catch (error) {
-      console.error('Failed to create GraphQL client:', error);
-      ctx.status = 500;
-      ctx.body = 'Failed to create GraphQL client';
-      return;
-    }
-    
-    console.log('Executing GraphQL query for subscription check...');
-    let response;
-    try {
-      response = await client.query({
-        data: `{
-          currentAppInstallation {
-            activeSubscriptions {
-              id
-              status
-              name
-              test
-            }
-          }
-        }`
-      });
-      console.log('GraphQL query executed successfully');
-    } catch (error) {
-      console.error('GraphQL query failed:', error);
-      console.error('Error details:', {
-        message: error.message,
-        statusCode: error.response?.statusCode,
-        body: error.response?.body
-      });
-      ctx.status = 500;
-      ctx.body = 'GraphQL query failed';
-      return;
-    }
-    
-    const subscriptions = response.body.data.currentAppInstallation.activeSubscriptions || [];
-    console.log('Found subscriptions:', subscriptions.length);
-    subscriptions.forEach(sub => {
-      console.log('Subscription:', { id: sub.id, status: sub.status, name: sub.name, test: sub.test });
-    });
-    
-    const hasActiveSubscription = subscriptions.some(sub => 
-      sub.status === 'ACTIVE' || sub.status === 'PENDING'
-    );
-    
-    console.log('Has active subscription:', hasActiveSubscription);
-    ctx.state.hasActiveSubscription = hasActiveSubscription;
-    
-    // Allow billing status check always
-    if (ctx.path === '/api/billing/status') {
-      await next();
-      return;
-    }
-    
-    // For main route, check subscription
-    if (ctx.path === '/' && !hasActiveSubscription) {
-      const shop = ctx.state.shop;
-      const storeHandle = shop.replace('.myshopify.com', '');
-      const appHandle = 'bgn2eur-price-display';
-      
-      const planSelectionUrl = `https://admin.shopify.com/store/${storeHandle}/charges/${appHandle}/pricing_plans`;
-      
-      // Use App Bridge for redirect if in iframe
-      if (ctx.headers['sec-fetch-dest'] === 'iframe') {
-        ctx.set('Content-Type', 'text/html');
-        ctx.body = `
-          <!DOCTYPE html>
-          <html>
-          <head>
-            <meta charset="utf-8">
-            <title>Redirecting to billing...</title>
-            <meta name="shopify-api-key" content="${SHOPIFY_API_KEY}" />
-            <script src="https://cdn.shopify.com/shopifycloud/app-bridge.js"></script>
-          </head>
-          <body>
-            <script>
-              var AppBridge = window['app-bridge'];
-              var actions = AppBridge.actions;
-              var createApp = AppBridge.default;
-              var app = createApp({
-                apiKey: '${SHOPIFY_API_KEY}',
-                host: '${ctx.query.host || ''}'
-              });
-              var redirect = actions.Redirect.create(app);
-              redirect.dispatch(actions.Redirect.Action.REMOTE, '${planSelectionUrl}');
-            </script>
-          </body>
-          </html>
-        `;
-      } else {
-        // Standard redirect if not in iframe
-        ctx.redirect(planSelectionUrl);
-      }
-      return;
-    }
-    
-    await next();
-  } catch (error) {
-    console.error('Subscription check error:', error);
-    await next();
-  }
-}
-
-// Simplified billing callback for managed pricing
-router.get('/api/billing/callback', authenticateRequest, async (ctx) => {
-  // Managed pricing handles everything, just redirect back
-  ctx.redirect('/');
-});
-
-// Check subscription status endpoint
-router.get('/api/billing/status', authenticateRequest, async (ctx) => {
-  try {
-    const client = new shopify.clients.Graphql({
+    const client = new shopify.api.clients.Graphql({
       session: ctx.state.session,
     });
     
+    // Check for active subscriptions
     const response = await client.query({
       data: `{
         currentAppInstallation {
           activeSubscriptions {
             id
             status
-            name
-            test
+            trialDays
+            createdAt
           }
         }
       }`
     });
     
     const subscriptions = response.body.data.currentAppInstallation.activeSubscriptions || [];
-    const hasActiveSubscription = subscriptions.some(sub => 
-      sub.status === 'ACTIVE' || sub.status === 'PENDING'
-    );
+    const hasActiveSubscription = subscriptions.some(sub => sub.status === 'ACTIVE');
     
-    ctx.body = {
-      hasActiveSubscription,
-      subscriptions,
-      shop: ctx.state.shop
-    };
+    ctx.state.hasActiveSubscription = hasActiveSubscription;
+    
+    // Always allow access to billing endpoints
+    if (ctx.path.includes('/api/billing') || ctx.path.includes('/api/subscription')) {
+      await next();
+      return;
+    }
+    
+    // Check if needs subscription
+    if (!hasActiveSubscription && ctx.path !== '/') {
+      ctx.redirect('/?billing=required');
+      return;
+    }
+    
+    await next();
   } catch (error) {
-    console.error('Billing status error:', error);
-    ctx.status = 500;
-    ctx.body = { error: error.message };
+    console.error('Subscription check error:', error);
+    // Allow access on error to prevent blocking
+    await next();
   }
+}
+
+// Billing endpoints
+router.get('/api/billing/create', authenticateRequest, async (ctx) => {
+  try {
+    const client = new shopify.api.clients.Graphql({
+      session: ctx.state.session,
+    });
+    
+    const TEST_MODE = process.env.NODE_ENV !== 'production';
+    
+    const response = await client.query({
+      data: `mutation {
+        appSubscriptionCreate(
+          name: "BGN/EUR Price Display",
+          test: ${TEST_MODE ? true : null},
+          trialDays: 5,
+          returnUrl: "${HOST}/api/billing/callback?shop=${ctx.state.shop}",
+          lineItems: [{
+            plan: {
+              appRecurringPricingDetails: {
+                price: { amount: 14.99, currencyCode: USD },
+                interval: EVERY_30_DAYS
+              }
+            }
+          }]
+        ) {
+          appSubscription {
+            id
+          }
+          confirmationUrl
+          userErrors {
+            field
+            message
+          }
+        }
+      }`
+    });
+    
+    const { confirmationUrl, userErrors } = response.body.data.appSubscriptionCreate;
+    
+    if (userErrors?.length > 0) {
+      console.error('Billing errors:', userErrors);
+      ctx.status = 400;
+      ctx.body = { error: userErrors[0].message };
+      return;
+    }
+    
+    ctx.body = { confirmationUrl };
+  } catch (error) {
+    console.error('Create subscription error:', error);
+    ctx.status = 500;
+    ctx.body = { error: 'Failed to create subscription' };
+  }
+});
+
+router.get('/api/billing/callback', authenticateRequest, async (ctx) => {
+  const { charge_id } = ctx.query;
+  
+  if (charge_id) {
+    // Subscription was accepted
+    console.log('Subscription activated:', charge_id);
+    ctx.redirect('/?billing=success');
+  } else {
+    // Subscription was declined
+    ctx.redirect('/?billing=declined');
+  }
+});
+
+// Check subscription status endpoint
+router.get('/api/billing/status', authenticateRequest, requiresSubscription, async (ctx) => {
+  ctx.body = {
+    hasActiveSubscription: ctx.state.hasActiveSubscription,
+    shop: ctx.state.shop
+  };
 });
 
 // API endpoints
@@ -823,8 +481,38 @@ router.get('/api/shop', authenticateRequest, requiresSubscription, async (ctx) =
   }
 });
 
-// Main app route - with subscription check
-router.get('(/)', authenticateRequest, requiresSubscription, async (ctx) => {
+router.get('/api/orders', authenticateRequest, requiresSubscription, async (ctx) => {
+  console.log('=== ORDERS API TEST ===');
+  
+  try {
+    const response = await fetch(`https://${ctx.state.shop}/admin/api/2024-10/orders.json?limit=10`, {
+      headers: { 
+        'X-Shopify-Access-Token': ctx.state.session.accessToken,
+        'Content-Type': 'application/json'
+      }
+    });
+    
+    if (!response.ok) {
+      throw new Error(`Shopify API error: ${response.status}`);
+    }
+    
+    const orders = await response.json();
+    ctx.body = {
+      success: true,
+      shop: ctx.state.shop,
+      ordersCount: orders.orders?.length || 0,
+      orders: orders.orders || []
+    };
+    
+  } catch (error) {
+    console.error('Error fetching orders:', error);
+    ctx.status = 500;
+    ctx.body = 'Failed to fetch orders: ' + error.message;
+  }
+});
+
+// Main app route
+router.get('(/)', async (ctx) => {
   console.log('=== MAIN ROUTE ===');
   const shop = ctx.query.shop;
   const host = ctx.query.host;
@@ -835,7 +523,6 @@ router.get('(/)', authenticateRequest, requiresSubscription, async (ctx) => {
     return;
   }
   
-  // Нормално зареждане на приложението
   ctx.set('Content-Type', 'text/html');
   ctx.body = `
 <!DOCTYPE html>
@@ -1194,6 +881,8 @@ router.get('(/)', authenticateRequest, requiresSubscription, async (ctx) => {
   </div>
   
   <script>
+    let billingStatus = null;
+    
     async function loadAppData() {
       try {
         const response = await fetch('/api/shop?shop=${shop}');
@@ -1202,6 +891,12 @@ router.get('(/)', authenticateRequest, requiresSubscription, async (ctx) => {
           console.log('Shop data loaded:', data);
           document.getElementById('loading').style.display = 'none';
           document.getElementById('status-badge').style.display = 'inline-block';
+          
+          // Check billing status
+          checkBillingStatus();
+        } else if (response.status === 302 || response.redirected) {
+          // Redirected due to no subscription
+          showBillingPrompt();
         } else {
           console.error('Failed to load shop data');
           document.getElementById('loading').innerHTML = 'Грешка при зареждане';
@@ -1209,6 +904,63 @@ router.get('(/)', authenticateRequest, requiresSubscription, async (ctx) => {
       } catch (error) {
         console.error('Error loading app data:', error);
         document.getElementById('loading').innerHTML = 'Грешка при зареждане';
+      }
+    }
+    
+    async function checkBillingStatus() {
+      try {
+        const response = await fetch('/api/billing/status?shop=${shop}');
+        if (response.ok) {
+          const data = await response.json();
+          billingStatus = data.hasActiveSubscription;
+          
+          if (!billingStatus) {
+            showBillingPrompt();
+          }
+        }
+      } catch (error) {
+        console.error('Error checking billing:', error);
+      }
+    }
+    
+    function showBillingPrompt() {
+      const billingPrompt = \`
+        <div style="background: #fff3cd; border: 2px solid #ffc107; border-radius: 8px; padding: 24px; margin-bottom: 24px; text-align: center;">
+          <h3 style="margin: 0 0 16px 0; color: #856404;">🎁 Започнете 5-дневен безплатен пробен период</h3>
+          <p style="margin: 0 0 20px 0; color: #856404;">
+            След пробния период: $14.99/месец<br>
+            Можете да отмените по всяко време
+          </p>
+          <button onclick="startBilling()" class="big-button" style="background: #ffc107; color: #212529;">
+            Започни безплатен пробен период
+          </button>
+        </div>
+      \`;
+      
+      // Insert billing prompt before main content
+      const container = document.querySelector('.container');
+      const header = document.querySelector('.header');
+      header.insertAdjacentHTML('afterend', billingPrompt);
+      
+      // Hide main functionality
+      document.querySelector('.quick-action').style.opacity = '0.5';
+      document.querySelector('.quick-action').style.pointerEvents = 'none';
+    }
+    
+    async function startBilling() {
+      try {
+        const response = await fetch('/api/billing/create?shop=${shop}');
+        const data = await response.json();
+        
+        if (data.confirmationUrl) {
+          // Redirect to Shopify billing page
+          window.top.location.href = data.confirmationUrl;
+        } else {
+          alert('Грешка при стартиране на пробен период. Моля опитайте отново.');
+        }
+      } catch (error) {
+        console.error('Billing error:', error);
+        alert('Грешка при стартиране на пробен период. Моля опитайте отново.');
       }
     }
     
@@ -1226,7 +978,14 @@ router.get('(/)', authenticateRequest, requiresSubscription, async (ctx) => {
       event.target.classList.add('active');
     }
     
-    // Load app data after page loads
+    // Check URL parameters for billing status
+    const urlParams = new URLSearchParams(window.location.search);
+    if (urlParams.get('billing') === 'success') {
+      alert('🎉 Успешно активирахте плана! Вече можете да използвате всички функции.');
+    } else if (urlParams.get('billing') === 'declined') {
+      alert('❌ Плащането беше отказано. Моля опитайте отново.');
+    }
+    
     setTimeout(loadAppData, 1000);
   </script>
 </body>
@@ -1242,8 +1001,7 @@ router.get('/debug', async (ctx) => {
       id: id,
       shop: session.shop,
       isOnline: session.isOnline,
-      hasToken: !!session.accessToken && session.accessToken !== 'placeholder',
-      scope: session.scope
+      hasToken: !!session.accessToken && session.accessToken !== 'placeholder'
     });
   }
   
@@ -1254,119 +1012,10 @@ router.get('/debug', async (ctx) => {
       nodeVersion: process.version,
       hasShopifyKey: !!SHOPIFY_API_KEY,
       scopes: SCOPES,
-      host: HOST,
-      hostName: HOST_NAME
+      host: HOST
     },
-    sessions: allSessions,
-    totalSessions: allSessions.length,
-    shopifyConfig: {
-      apiKey: SHOPIFY_API_KEY ? 'SET' : 'NOT SET',
-      apiSecretKey: SHOPIFY_API_SECRET ? 'SET' : 'NOT SET',
-      scopes: SCOPES.split(','),
-      hostName: HOST_NAME || HOST.replace(/^https?:\/\//, ''),
-      isEmbeddedApp: true,
-      useOnlineTokens: false,
-      nodeEnv: NODE_ENV,
-      testMode: TEST_MODE
-    }
+    sessions: allSessions
   };
-});
-
-// Public debug endpoint за проверка на billing
-router.get('/debug/billing/:shop', async (ctx) => {
-  const shop = ctx.params.shop;
-  
-  try {
-    const sessions = await memorySessionStorage.findSessionsByShop(shop);
-    const offlineSession = sessions.find(s => !s.isOnline);
-    
-    if (!offlineSession) {
-      ctx.body = {
-        error: 'No offline session found',
-        shop: shop,
-        totalSessions: sessions.length,
-        sessionTypes: sessions.map(s => ({ 
-          id: s.id, 
-          isOnline: s.isOnline,
-          hasToken: !!s.accessToken
-        }))
-      };
-      return;
-    }
-    
-    const client = new shopify.clients.Graphql({
-      session: offlineSession,
-    });
-    
-    const response = await client.query({
-      data: `{
-        currentAppInstallation {
-          id
-          activeSubscriptions {
-            id
-            status
-            name
-            test
-            trialDays
-            createdAt
-          }
-        }
-      }`
-    });
-    
-    ctx.body = {
-      shop: shop,
-      sessionId: offlineSession.id,
-      hasToken: !!offlineSession.accessToken,
-      installation: response.body.data.currentAppInstallation
-    };
-    
-  } catch (error) {
-    ctx.status = 500;
-    ctx.body = {
-      error: error.message,
-      shop: shop
-    };
-  }
-});
-
-// Installation check endpoint
-router.get('/api/installation/check', async (ctx) => {
-  const { shop } = ctx.query;
-  
-  if (!shop) {
-    ctx.status = 400;
-    ctx.body = { error: 'Missing shop parameter' };
-    return;
-  }
-  
-  try {
-    const sessions = await memorySessionStorage.findSessionsByShop(shop);
-    const offlineSession = sessions.find(s => !s.isOnline);
-    
-    ctx.body = {
-      shop: shop,
-      hasOfflineSession: !!offlineSession,
-      hasAccessToken: !!offlineSession?.accessToken,
-      sessionDetails: offlineSession ? {
-        id: offlineSession.id,
-        shop: offlineSession.shop,
-        isOnline: offlineSession.isOnline,
-        hasAccessToken: !!offlineSession.accessToken,
-        scope: offlineSession.scope
-      } : null,
-      totalSessions: sessions.length,
-      allSessions: sessions.map(s => ({
-        id: s.id,
-        shop: s.shop,
-        isOnline: s.isOnline,
-        hasAccessToken: !!s.accessToken
-      }))
-    };
-  } catch (error) {
-    ctx.status = 500;
-    ctx.body = { error: error.message };
-  }
 });
 
 app.use(router.routes());
@@ -1374,45 +1023,11 @@ app.use(router.allowedMethods());
 
 const PORT = process.env.PORT || 3000;
 
-const server = app.listen(PORT, '0.0.0.0', function() {
+app.listen(PORT, '0.0.0.0', function() {
   console.log(`✓ Server listening on port ${PORT}`);
   console.log(`✓ Using Token Exchange authentication (Shopify managed install)`);
   console.log(`✓ App URL: ${HOST}`);
-  console.log('✓ Server ready to handle requests');
 }).on('error', (err) => {
   console.error('FATAL: Server failed to start:', err);
   process.exit(1);
-});
-
-// Add server timeout
-server.timeout = 30000; // 30 seconds
-server.keepAliveTimeout = 30000; // 30 seconds
-
-// Add global error handler
-process.on('uncaughtException', (err) => {
-  console.error('Uncaught Exception:', err);
-  console.error('Stack trace:', err.stack);
-  // Don't exit immediately, let the server handle it
-});
-
-process.on('unhandledRejection', (reason, promise) => {
-  console.error('Unhandled Rejection at:', promise, 'reason:', reason);
-  // Don't exit immediately, let the server handle it
-});
-
-// Graceful shutdown
-process.on('SIGTERM', () => {
-  console.log('SIGTERM received, shutting down gracefully');
-  server.close(() => {
-    console.log('Server closed');
-    process.exit(0);
-  });
-});
-
-process.on('SIGINT', () => {
-  console.log('SIGINT received, shutting down gracefully');
-  server.close(() => {
-    console.log('Server closed');
-    process.exit(0);
-  });
 });
