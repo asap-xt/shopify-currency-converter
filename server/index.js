@@ -1057,7 +1057,7 @@ router.get('(/)', async (ctx) => {
         if (response.ok) {
           const data = await response.json();
           billingStatus = data.hasActiveSubscription;
-          
+          console.log('Billing status:', billingStatus);
           if (!billingStatus) {
             showBillingPrompt();
           }
