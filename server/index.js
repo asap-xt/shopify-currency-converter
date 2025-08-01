@@ -419,10 +419,10 @@ async function requiresSubscription(ctx, next) {
   }
 }
 
-router.get("/billing/confirm", (req, res) => {
-  const { shop } = req.query;
-  ACTIVE_SUBSCRIPTION[shop] = true; // Запази статуса (тук в паметта)
-  res.send("Абонаментът е активиран! 🎉 Можеш да ползваш приложението.");
+router.get("/billing/confirm", async (ctx) => {
+  const { shop } = ctx.query;
+  ACTIVE_SUBSCRIPTION[shop] = true;
+  ctx.body = "Абонаментът е активиран! 🎉 Можеш да ползваш приложението.";
 });
 
 // Billing endpoints
@@ -583,28 +583,25 @@ const APP_PRICE = 14.99;
 const CURRENCY = "USD";
 let ACTIVE_SUBSCRIPTION = {}; // тестово — в реално приложение запази в база
 
-// 🚀 1. Route след install (Shopify ще пренасочи тук)
-router.get("/auth/callback", async (req, res) => {
-  const { shop, code } = req.query;
+router.get("/auth/callback", async (ctx) => {
+  const { shop, code } = ctx.query;
 
-  // Обменяме code за access token
-  const tokenResp = await fetch(
-    `https://${shop}/admin/oauth/access_token`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        client_id: SHOPIFY_API_KEY,
-        client_secret: SHOPIFY_API_SECRET,
-        code,
-      }),
-    }
-  );
+  console.log("🚀 Влязохме в /auth/callback за магазин:", shop);
+
+  // Разменяме code за access token
+  const tokenResp = await fetch(`https://${shop}/admin/oauth/access_token`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      client_id: SHOPIFY_API_KEY,
+      client_secret: SHOPIFY_API_SECRET,
+      code,
+    }),
+  });
   const tokenData = await tokenResp.json();
   const accessToken = tokenData.access_token;
-  console.log ('tokenData: ' + tokenData);
-  console.log ('shop: ' + shop); 
-  // 2. Създаваме Subscription (ако няма вече активен)
+
+  // Ако няма активен subscription → създаваме
   if (!ACTIVE_SUBSCRIPTION[shop]) {
     const subscriptionResp = await fetch(
       `https://${shop}/admin/api/2024-07/graphql.json`,
@@ -638,14 +635,20 @@ router.get("/auth/callback", async (req, res) => {
         }),
       }
     );
-    const subData = await subscriptionResp.json();
-    const confirmationUrl = subData.data.appSubscriptionCreate.confirmationUrl;
 
-    return res.redirect(confirmationUrl);
+    const subData = await subscriptionResp.json();
+    console.log("Shopify subscription response:", subData);
+
+    const confirmationUrl =
+      subData.data.appSubscriptionCreate.confirmationUrl;
+
+    // Пренасочваме търговеца към потвърждаване
+    ctx.redirect(confirmationUrl);
+    return;
   }
 
-  // ако вече има активен абонамент
-  res.redirect(`${HOST}/?shop=${shop}`);
+  // Ако вече е абониран
+  ctx.redirect(`${HOST}/?shop=${shop}`);
 });
 
 // Main app route
