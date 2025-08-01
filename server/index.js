@@ -8,19 +8,12 @@ import crypto from 'crypto';
 import getRawBody from 'raw-body';
 import { shopifyApi, LATEST_API_VERSION, Session, GraphqlClient } from '@shopify/shopify-api';
 
-// Environment and test mode configuration
-const NODE_ENV = process.env.NODE_ENV || 'development';
-const TEST_MODE = NODE_ENV !== 'production';
-
 // Environment check
 console.log('=== Environment Variables Check ===');
-console.log('NODE_ENV:', NODE_ENV);
-console.log('TEST_MODE:', TEST_MODE);
 console.log('SHOPIFY_API_KEY:', process.env.SHOPIFY_API_KEY ? 'SET' : 'MISSING');
 console.log('SHOPIFY_API_SECRET:', process.env.SHOPIFY_API_SECRET ? 'SET' : 'MISSING');
 console.log('SCOPES:', process.env.SCOPES);
 console.log('HOST:', process.env.HOST);
-console.log('HOST_NAME:', process.env.HOST_NAME);
 console.log('====================================');
 
 // Session storage
@@ -61,35 +54,9 @@ const {
 } = process.env;
 
 // Validation
-if (!SHOPIFY_API_KEY || !SHOPIFY_API_SECRET || !SCOPES || (!HOST && !HOST_NAME)) {
+if (!SHOPIFY_API_KEY || !SHOPIFY_API_SECRET || !SCOPES || !HOST_NAME) {
   console.error('FATAL: Missing required environment variables!');
-  console.error('Missing:', {
-    SHOPIFY_API_KEY: !SHOPIFY_API_KEY,
-    SHOPIFY_API_SECRET: !SHOPIFY_API_SECRET,
-    SCOPES: !SCOPES,
-    HOST: !HOST,
-    HOST_NAME: !HOST_NAME
-  });
   process.exit(1);
-}
-
-// Validate required scopes for public apps
-const requiredScopes = [
-  'read_products',
-  'write_products', 
-  'read_orders',
-  'write_orders',
-  'read_app_subscriptions',
-  'write_app_subscriptions'
-];
-
-const currentScopes = SCOPES.split(',');
-const missingScopes = requiredScopes.filter(scope => !currentScopes.includes(scope));
-
-if (missingScopes.length > 0) {
-  console.error('WARNING: Missing required scopes for public app:', missingScopes);
-  console.error('Current scopes:', currentScopes);
-  console.error('Required scopes for public app:', requiredScopes);
 }
 
 // Initialize Shopify API
@@ -97,19 +64,11 @@ const shopify = shopifyApi({
   apiKey: SHOPIFY_API_KEY,
   apiSecretKey: SHOPIFY_API_SECRET,
   scopes: SCOPES.split(','),
-  hostName: HOST_NAME || HOST.replace(/^https?:\/\//, ''), // Remove protocol
+  hostName: HOST_NAME,
   apiVersion: '2024-10',
   isEmbeddedApp: true,
   sessionStorage: memorySessionStorage,
-  // For public apps, we need to handle both online and offline tokens
-  useOnlineTokens: false,
-  // Enable managed pricing support
-  future: {
-    unstable_managedPricingSupport: true,
-  },
 });
-
-console.log('Shopify API initialized');
 
 const app = new Koa();
 app.keys = [SHOPIFY_API_SECRET];
@@ -127,17 +86,12 @@ app.use(async (ctx, next) => {
 
 // Request logging
 app.use(async (ctx, next) => {
-  const start = Date.now();
   console.log(`${new Date().toISOString()} - ${ctx.method} ${ctx.path}`);
   try {
     await next();
-    const duration = Date.now() - start;
-    console.log(`${new Date().toISOString()} - ${ctx.method} ${ctx.path} - ${ctx.status} - ${duration}ms`);
   } catch (err) {
-    const duration = Date.now() - start;
-    console.error(`Error handling ${ctx.method} ${ctx.path} - ${duration}ms:`, err);
-    ctx.status = 500;
-    ctx.body = 'Internal Server Error';
+    console.error(`Error handling ${ctx.method} ${ctx.path}:`, err);
+    throw err;
   }
 });
 
@@ -314,7 +268,6 @@ router.get('/auth/callback', async (ctx) => {
 // Middleware за автентикация чрез Token Exchange
 async function authenticateRequest(ctx, next) {
   console.log('=== AUTHENTICATING REQUEST ===');
-  const start = Date.now();
   
   let encodedSessionToken = null;
   let decodedSessionToken = null;
@@ -358,109 +311,21 @@ async function authenticateRequest(ctx, next) {
   const shop = dest.hostname;
   
   const sessions = await memorySessionStorage.findSessionsByShop(shop);
-  console.log('Found sessions for shop:', shop, 'Count:', sessions.length);
-  sessions.forEach(s => {
-    console.log('Session:', { id: s.id, isOnline: s.isOnline, hasAccessToken: !!s.accessToken });
-  });
-  
-  // For public apps, we need to check both online and offline sessions
-  let session = sessions.find(s => !s.isOnline); // Offline session (preferred)
-  
-  if (!session) {
-    console.log('No offline session found, checking for online session...');
-    session = sessions.find(s => s.isOnline); // Online session (fallback)
-  }
-  
-  console.log('Selected session:', {
-    id: session?.id,
-    isOnline: session?.isOnline,
-    hasAccessToken: !!session?.accessToken
-  });
+  let session = sessions.find(s => !s.isOnline);
   
   if (!session || !session.accessToken || session.accessToken === 'placeholder') {
     console.log('No valid session with access token, performing token exchange...');
-    
+    console.log ('shop: ' + shop); 
+    console.log ('session token: ' + encodedSessionToken);
     try {
-      console.log('Starting token exchange for shop:', shop);
-      console.log('Session token length:', encodedSessionToken.length);
-      console.log('Shopify API config:', {
-        apiKey: SHOPIFY_API_KEY ? 'SET' : 'NOT SET',
-        apiSecretKey: SHOPIFY_API_SECRET ? 'SET' : 'NOT SET',
-        scopes: SCOPES,
-        hostName: HOST_NAME,
-        parsedScopes: SCOPES.split(','),
-        requiredScopes: ['read_orders', 'write_themes', 'read_locations']
-      });
-      
-      // Check if all required scopes are present
-      const requiredScopes = ['read_orders', 'write_themes', 'read_locations'];
-      const currentScopes = SCOPES.split(',');
-      const missingScopes = requiredScopes.filter(scope => !currentScopes.includes(scope));
-      
-      if (missingScopes.length > 0) {
-        console.error('Missing required scopes:', missingScopes);
-        console.error('Current scopes:', currentScopes);
-        console.error('Please add missing scopes in Partner Dashboard');
-      }
-      
-      // Check App URL configuration
-      console.log('App URL configuration check:');
-      console.log('- Current HOST:', HOST);
-      console.log('- Current HOST_NAME:', HOST_NAME);
-      console.log('- Expected App URL in Partner Dashboard:', HOST_NAME || HOST);
-      console.log('- Expected callback URL:', `${HOST_NAME || HOST}/auth/callback`);
-      
       const tokenExchangeResult = await shopify.auth.tokenExchange({
         shop: shop,
         sessionToken: encodedSessionToken,
-        // For managed install, we need to specify the app type
-        isOnline: false,
-        // Add test mode for development
-        test: TEST_MODE,
       });
       
       console.log('Token exchange successful');
-      console.log('Token exchange result:', {
-        hasAccessToken: !!tokenExchangeResult.accessToken,
-        accessTokenLength: tokenExchangeResult.accessToken?.length,
-        scope: tokenExchangeResult.scope,
-        expires: tokenExchangeResult.expires,
-        associatedUser: tokenExchangeResult.associatedUser,
-        accountOwner: tokenExchangeResult.accountOwner
-      });
-      
-      if (!tokenExchangeResult.accessToken) {
-        console.error('Token exchange succeeded but no access token received');
-        console.error('Token exchange result details:', {
-          hasAccessToken: !!tokenExchangeResult.accessToken,
-          hasScope: !!tokenExchangeResult.scope,
-          scope: tokenExchangeResult.scope,
-          expires: tokenExchangeResult.expires,
-          associatedUser: tokenExchangeResult.associatedUser,
-          accountOwner: tokenExchangeResult.accountOwner
-        });
-              console.error('This might be due to:');
-      console.error('1. App not configured for Managed Install in Partner Dashboard');
-      console.error('2. Incorrect scopes configuration');
-      console.error('3. App URL not properly configured');
-      console.error('4. App not properly installed in the store');
-      console.error('');
-      console.error('SOLUTION STEPS:');
-      console.error('1. Go to Partner Dashboard > Your App > App Setup');
-      console.error('2. Set App URL to:', HOST_NAME || HOST);
-      console.error('3. Add callback URL:', `${HOST_NAME || HOST}/auth/callback`);
-      console.error('4. Ensure all required scopes are added:', requiredScopes);
-      console.error('5. For Public Apps: Check App Store listing configuration');
-      console.error('6. Reinstall the app in your store');
-      console.error('');
-      console.error('PUBLIC APP SPECIFIC:');
-      console.error('- App is published in App Store');
-      console.error('- Users install via App Store, not Partner Dashboard');
-      console.error('- Check App Store listing for correct configuration');
-        ctx.status = 500;
-        ctx.body = 'Token exchange failed - no access token';
-        return;
-      }
+      console.log('Access token received:', tokenExchangeResult.accessToken ? 'Yes' : 'No');
+      console.log('Scope:', tokenExchangeResult.scope);
       
       const sessionId = `offline_${shop}`;
       session = new Session({
@@ -474,27 +339,9 @@ async function authenticateRequest(ctx, next) {
       
       await memorySessionStorage.storeSession(session);
       console.log('Session stored with ID:', sessionId);
-      console.log('Session details:', {
-        id: session.id,
-        shop: session.shop,
-        hasAccessToken: !!session.accessToken,
-        scope: session.scope
-      });
-      
-      // Verify session was stored correctly
-      const storedSession = await memorySessionStorage.loadSession(sessionId);
-      console.log('Stored session verification:', {
-        found: !!storedSession,
-        hasAccessToken: !!storedSession?.accessToken,
-        accessTokenLength: storedSession?.accessToken?.length
-      });
       
     } catch (error) {
       console.error('Token exchange failed:', error);
-      console.error('Error details:', {
-        message: error.message,
-        stack: error.stack
-      });
       ctx.status = 500;
       ctx.body = 'Token exchange failed';
       return;
@@ -504,110 +351,34 @@ async function authenticateRequest(ctx, next) {
   ctx.state.shop = shop;
   ctx.state.session = session;
   
-  const duration = Date.now() - start;
-  console.log('Session set in ctx.state:', {
-    shop: ctx.state.shop,
-    sessionId: ctx.state.session?.id,
-    hasAccessToken: !!ctx.state.session?.accessToken,
-    duration: `${duration}ms`
-  });
-  
   await next();
 }
 
 // Billing check middleware - UPDATED FOR MANAGED PRICING
 async function requiresSubscription(ctx, next) {
   try {
-    // Check if session exists and has access token
-    if (!ctx.state.session) {
-      console.error('No session found in ctx.state');
-      ctx.status = 500;
-      ctx.body = 'Session not found';
-      return;
-    }
-    
-    if (!ctx.state.session.accessToken || ctx.state.session.accessToken === 'placeholder') {
-      console.error('Session missing access token:', {
-        sessionId: ctx.state.session.id,
-        hasAccessToken: !!ctx.state.session.accessToken,
-        accessToken: ctx.state.session.accessToken,
-        accessTokenLength: ctx.state.session.accessToken?.length
-      });
-      ctx.status = 500;
-      ctx.body = 'Session missing access token';
-      return;
-    }
-    
-    // Additional check for valid access token format
-    if (typeof ctx.state.session.accessToken !== 'string' || ctx.state.session.accessToken.length < 10) {
-      console.error('Invalid access token format:', {
-        sessionId: ctx.state.session.id,
-        accessTokenType: typeof ctx.state.session.accessToken,
-        accessTokenLength: ctx.state.session.accessToken?.length
-      });
-      ctx.status = 500;
-      ctx.body = 'Invalid access token format';
-      return;
-    }
-    
-    console.log('Creating GraphQL client with session:', {
-      sessionId: ctx.state.session.id,
-      shop: ctx.state.session.shop,
-      hasAccessToken: !!ctx.state.session.accessToken
+    const client = new shopify.clients.Graphql({
+      session: ctx.state.session,
     });
     
-    let client;
-    try {
-      client = new shopify.clients.Graphql({
-        session: ctx.state.session,
-      });
-      console.log('GraphQL client created successfully');
-    } catch (error) {
-      console.error('Failed to create GraphQL client:', error);
-      ctx.status = 500;
-      ctx.body = 'Failed to create GraphQL client';
-      return;
-    }
-    
-    console.log('Executing GraphQL query for subscription check...');
-    let response;
-    try {
-      response = await client.query({
-        data: `{
-          currentAppInstallation {
-            activeSubscriptions {
-              id
-              status
-              name
-              test
-            }
+    const response = await client.query({
+      data: `{
+        currentAppInstallation {
+          activeSubscriptions {
+            id
+            status
+            name
+            test
           }
-        }`
-      });
-      console.log('GraphQL query executed successfully');
-    } catch (error) {
-      console.error('GraphQL query failed:', error);
-      console.error('Error details:', {
-        message: error.message,
-        statusCode: error.response?.statusCode,
-        body: error.response?.body
-      });
-      ctx.status = 500;
-      ctx.body = 'GraphQL query failed';
-      return;
-    }
+        }
+      }`
+    });
     
     const subscriptions = response.body.data.currentAppInstallation.activeSubscriptions || [];
-    console.log('Found subscriptions:', subscriptions.length);
-    subscriptions.forEach(sub => {
-      console.log('Subscription:', { id: sub.id, status: sub.status, name: sub.name, test: sub.test });
-    });
-    
     const hasActiveSubscription = subscriptions.some(sub => 
       sub.status === 'ACTIVE' || sub.status === 'PENDING'
     );
     
-    console.log('Has active subscription:', hasActiveSubscription);
     ctx.state.hasActiveSubscription = hasActiveSubscription;
     
     // Allow billing status check always
@@ -1178,21 +949,10 @@ router.get('/debug', async (ctx) => {
       nodeVersion: process.version,
       hasShopifyKey: !!SHOPIFY_API_KEY,
       scopes: SCOPES,
-      host: HOST,
-      hostName: HOST_NAME
+      host: HOST
     },
     sessions: allSessions,
-    totalSessions: allSessions.length,
-    shopifyConfig: {
-      apiKey: SHOPIFY_API_KEY ? 'SET' : 'NOT SET',
-      apiSecretKey: SHOPIFY_API_SECRET ? 'SET' : 'NOT SET',
-      scopes: SCOPES.split(','),
-      hostName: HOST_NAME || HOST.replace(/^https?:\/\//, ''),
-      isEmbeddedApp: true,
-      useOnlineTokens: false,
-      nodeEnv: NODE_ENV,
-      testMode: TEST_MODE
-    }
+    totalSessions: allSessions.length
   };
 });
 
@@ -1254,89 +1014,16 @@ router.get('/debug/billing/:shop', async (ctx) => {
   }
 });
 
-// Installation check endpoint
-router.get('/api/installation/check', async (ctx) => {
-  const { shop } = ctx.query;
-  
-  if (!shop) {
-    ctx.status = 400;
-    ctx.body = { error: 'Missing shop parameter' };
-    return;
-  }
-  
-  try {
-    const sessions = await memorySessionStorage.findSessionsByShop(shop);
-    const offlineSession = sessions.find(s => !s.isOnline);
-    
-    ctx.body = {
-      shop: shop,
-      hasOfflineSession: !!offlineSession,
-      hasAccessToken: !!offlineSession?.accessToken,
-      sessionDetails: offlineSession ? {
-        id: offlineSession.id,
-        shop: offlineSession.shop,
-        isOnline: offlineSession.isOnline,
-        hasAccessToken: !!offlineSession.accessToken,
-        scope: offlineSession.scope
-      } : null,
-      totalSessions: sessions.length,
-      allSessions: sessions.map(s => ({
-        id: s.id,
-        shop: s.shop,
-        isOnline: s.isOnline,
-        hasAccessToken: !!s.accessToken
-      }))
-    };
-  } catch (error) {
-    ctx.status = 500;
-    ctx.body = { error: error.message };
-  }
-});
-
 app.use(router.routes());
 app.use(router.allowedMethods());
 
 const PORT = process.env.PORT || 3000;
 
-const server = app.listen(PORT, '0.0.0.0', function() {
+app.listen(PORT, '0.0.0.0', function() {
   console.log(`✓ Server listening on port ${PORT}`);
   console.log(`✓ Using Token Exchange authentication (Shopify managed install)`);
   console.log(`✓ App URL: ${HOST}`);
-  console.log('✓ Server ready to handle requests');
 }).on('error', (err) => {
   console.error('FATAL: Server failed to start:', err);
   process.exit(1);
-});
-
-// Add server timeout
-server.timeout = 30000; // 30 seconds
-server.keepAliveTimeout = 30000; // 30 seconds
-
-// Add global error handler
-process.on('uncaughtException', (err) => {
-  console.error('Uncaught Exception:', err);
-  console.error('Stack trace:', err.stack);
-  // Don't exit immediately, let the server handle it
-});
-
-process.on('unhandledRejection', (reason, promise) => {
-  console.error('Unhandled Rejection at:', promise, 'reason:', reason);
-  // Don't exit immediately, let the server handle it
-});
-
-// Graceful shutdown
-process.on('SIGTERM', () => {
-  console.log('SIGTERM received, shutting down gracefully');
-  server.close(() => {
-    console.log('Server closed');
-    process.exit(0);
-  });
-});
-
-process.on('SIGINT', () => {
-  console.log('SIGINT received, shutting down gracefully');
-  server.close(() => {
-    console.log('Server closed');
-    process.exit(0);
-  });
 });
