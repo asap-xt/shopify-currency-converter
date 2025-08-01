@@ -409,6 +409,8 @@ async function authenticateRequest(ctx, next) {
       console.log('- Current HOST_NAME:', HOST_NAME);
       console.log('- Expected App URL in Partner Dashboard:', HOST_NAME || HOST);
       console.log('- Expected callback URL:', `${HOST_NAME || HOST}/auth/callback`);
+      console.log ('shop: ' + shop); 
+      console.log ('session token: ' + encodedSessionToken);
       
       const tokenExchangeResult = await shopify.auth.tokenExchange({
         shop: shop,
