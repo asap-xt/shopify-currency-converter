@@ -290,7 +290,6 @@ async function authenticateRequest(ctx, next) {
       const tokenExchangeResult = await shopify.auth.tokenExchange({
         shop: shop,
         sessionToken: encodedSessionToken,
-        requestedTokenType: 'offline_access_token',
       });
       
       console.log('Token exchange successful');
