@@ -300,27 +300,80 @@ async function authenticateRequest(ctx, next) {
   console.log('=== AUTHENTICATING REQUEST ===');
   console.log('Path:', ctx.path);
   console.log('Method:', ctx.method);
-  console.log('Query:', ctx.query);
+  console.log('Headers:', ctx.headers);
+  
+  // Check for App Bridge Bearer token first
+  const bearerToken = ctx.headers['authorization']?.replace('Bearer ', '');
+  if (bearerToken) {
+    console.log('Found Bearer token, processing App Bridge request');
+    
+    try {
+      // For App Bridge requests, we need to validate the session token
+      const session = await shopify.session.loadCurrentSession(ctx.req, ctx.res, false);
+      console.log('Loaded session from Bearer token:', session);
+      
+      if (session && session.accessToken) {
+        ctx.state.shop = session.shop;
+        ctx.state.session = session;
+        console.log('App Bridge request authenticated successfully');
+        await next();
+        return;
+      } else {
+        console.log('No valid session found for Bearer token');
+        ctx.status = 401;
+        ctx.body = { error: 'Invalid session token' };
+        return;
+      }
+    } catch (error) {
+      console.error('Error processing Bearer token:', error);
+      ctx.status = 401;
+      ctx.body = { error: 'Authentication failed' };
+      return;
+    }
+  }
+  
+  // For embedded app session token
+  const sessionToken = ctx.query.id_token || ctx.headers['x-shopify-session-token'];
+  if (sessionToken) {
+    console.log('Found session token, processing embedded app request');
+    
+    try {
+      // Validate session token
+      const session = await shopify.session.loadCurrentSession(ctx.req, ctx.res, false);
+      console.log('Loaded session from session token:', session);
+      
+      if (session && session.accessToken) {
+        ctx.state.shop = session.shop;
+        ctx.state.session = session;
+        console.log('Embedded app request authenticated successfully');
+        await next();
+        return;
+      } else {
+        console.log('No valid session found for session token');
+        ctx.status = 401;
+        ctx.body = { error: 'Invalid session token' };
+        return;
+      }
+    } catch (error) {
+      console.error('Error processing session token:', error);
+      ctx.status = 401;
+      ctx.body = { error: 'Authentication failed' };
+      return;
+    }
+  }
   
   // For API requests, try to get shop from query parameter
   if (ctx.path.startsWith('/api/') && ctx.query.shop) {
     console.log('API request with shop parameter:', ctx.query.shop);
     
     const shop = ctx.query.shop;
-    const sessions = await memorySessionStorage.findSessionsByShop(shop);
-    const session = sessions.find(s => !s.isOnline);
-    
-    console.log('Sessions found for shop:', sessions.length);
-    console.log('Valid session found:', !!session);
-    console.log('Session has access token:', !!(session && session.accessToken));
-    
-    // For billing endpoints, allow access even without session
-    if (ctx.path.includes('/api/billing/')) {
-      console.log('Billing endpoint - allowing access without session');
-      ctx.state.shop = shop;
-      ctx.state.session = session || { shop: shop, accessToken: null };
-      await next();
-      return;
+    let session;
+    try {
+      session = await shopify.session.loadCurrentSession(ctx.req, ctx.res, false); // false for offline sessions
+      console.log('Loaded session:', session);
+    } catch (error) {
+      console.error('Error loading session:', error);
+      session = null;
     }
     
     if (!session || !session.accessToken) {
@@ -337,87 +390,51 @@ async function authenticateRequest(ctx, next) {
     return;
   }
   
-  // For embedded app requests, use session token
-  let encodedSessionToken = null;
-  let decodedSessionToken = null;
-  
-  try {
-    encodedSessionToken = getSessionTokenHeader(ctx) || getSessionTokenFromUrlParam(ctx);
-    
-    if (!encodedSessionToken) {
-      console.log('No session token found');
-      const isDocumentRequest = !ctx.headers['authorization'];
-      if (isDocumentRequest) {
-        redirectToSessionTokenBouncePage(ctx);
-        return;
-      }
-      
-      ctx.status = 401;
-      ctx.set('X-Shopify-Retry-Invalid-Session-Request', '1');
-      ctx.body = 'Unauthorized';
-      return;
-    }
-    
-    decodedSessionToken = await shopify.session.decodeSessionToken(encodedSessionToken);
-    console.log('Session token decoded:', { dest: decodedSessionToken.dest, iss: decodedSessionToken.iss });
-    
-  } catch (e) {
-    console.error('Invalid session token:', e.message);
-    
-    const isDocumentRequest = !ctx.headers['authorization'];
-    if (isDocumentRequest) {
-      redirectToSessionTokenBouncePage(ctx);
-      return;
-    }
-    
-    ctx.status = 401;
-    ctx.set('X-Shopify-Retry-Invalid-Session-Request', '1');
-    ctx.body = 'Unauthorized';
-    return;
-  }
-  
-  const dest = new URL(decodedSessionToken.dest);
-  const shop = dest.hostname;
-  
-  const sessions = await memorySessionStorage.findSessionsByShop(shop);
-  let session = sessions.find(s => !s.isOnline);
-  
-  if (!session || !session.accessToken || session.accessToken === 'placeholder') {
-    console.log('No valid session with access token, performing token exchange...');
+  // For embedded app requests without explicit token
+  const shop = ctx.query.shop;
+  if (shop) {
+    console.log('Embedded app request for shop:', shop);
     
     try {
-      const tokenExchangeResult = await shopify.auth.tokenExchange({
-        shop: shop,
-        sessionToken: encodedSessionToken,
-        requestedTokenType: 'offline_access_token',
-      });
+      const session = await shopify.session.loadCurrentSession(ctx.req, ctx.res, false);
+      console.log('Loaded session for embedded app:', session);
       
-      console.log('Token exchange successful');
-      
-      const sessionId = `${shop}_offline`;
-      session = new Session({
-        id: sessionId,
-        shop: shop,
-        state: 'active',
-        isOnline: false,
-        accessToken: tokenExchangeResult.accessToken,
-        scope: tokenExchangeResult.scope,
-      });
-      
-      await memorySessionStorage.storeSession(session);
-      
+      if (session && session.accessToken) {
+        ctx.state.shop = shop;
+        ctx.state.session = session;
+        console.log('Embedded app request authenticated successfully');
+        await next();
+        return;
+      } else {
+        console.log('No valid session found for embedded app');
+        // For embedded apps, redirect to auth instead of returning 401
+        ctx.status = 401;
+        ctx.body = { 
+          error: 'No valid session found',
+          shop: shop,
+          sessionsCount: 0,
+          hasSession: false,
+          hasToken: false
+        };
+        return;
+      }
     } catch (error) {
-      console.error('Token exchange failed:', error);
-      ctx.status = 500;
-      ctx.body = 'Token exchange failed';
+      console.error('Error loading session for embedded app:', error);
+      ctx.status = 401;
+      ctx.body = { 
+        error: 'Authentication failed',
+        shop: shop,
+        sessionsCount: 0,
+        hasSession: false,
+        hasToken: false
+      };
       return;
     }
   }
   
-  ctx.state.shop = shop;
-  ctx.state.session = session;
-  
-  await next();
+  console.log('No authentication method found');
+  ctx.status = 401;
+  ctx.body = { error: 'Authentication required' };
 }
 
 // Billing check middleware for main route
@@ -812,11 +829,51 @@ router.get('/api/billing/callback', authenticateRequest, async (ctx) => {
 });
 
 // Check subscription status endpoint
-router.get('/api/billing/status', authenticateRequest, requiresSubscription, async (ctx) => {
-  ctx.body = {
-    hasActiveSubscription: ctx.state.hasActiveSubscription,
-    shop: ctx.state.shop
-  };
+router.get('/api/billing/status', authenticateRequest, async (ctx) => {
+  console.log('=== BILLING STATUS API ===');
+  console.log('Shop:', ctx.state.shop);
+  console.log('Session:', ctx.state.session);
+  
+  try {
+    const client = new shopify.clients.Graphql({
+      domain: ctx.state.shop,
+      accessToken: ctx.state.session.accessToken,
+    });
+    
+    const response = await client.query({
+      data: `{
+        currentAppInstallation {
+          activeSubscriptions {
+            id
+            status
+            trialDays
+            createdAt
+          }
+        }
+      }`
+    });
+    
+    const subscriptions = response.body.data.currentAppInstallation.activeSubscriptions || [];
+    
+    // Check for valid subscription
+    const hasValidSubscription = subscriptions.some(sub => {
+      if (sub.status === 'ACTIVE') return true;
+      
+      if (sub.status === 'PENDING' && sub.trialDays > 0) {
+        const trialEndDate = new Date(sub.createdAt);
+        trialEndDate.setDate(trialEndDate.getDate() + sub.trialDays);
+        return new Date() < trialEndDate;
+      }
+      
+      return false;
+    });
+    
+    ctx.body = { hasActiveSubscription: hasValidSubscription };
+  } catch (error) {
+    console.error('Billing status API error:', error);
+    ctx.status = 500;
+    ctx.body = { error: 'Failed to check billing status' };
+  }
 });
 
 // Debug billing endpoint
@@ -876,31 +933,23 @@ router.get('/api/test', authenticateRequest, async (ctx) => {
   };
 });
 
-router.get('/api/shop', authenticateRequest, requiresSubscription, async (ctx) => {
-  console.log('=== SHOP INFO API ===');
+router.get('/api/shop', authenticateRequest, async (ctx) => {
+  console.log('=== SHOP API ===');
+  console.log('Shop:', ctx.state.shop);
+  console.log('Session:', ctx.state.session);
   
   try {
-    const response = await fetch(`https://${ctx.state.shop}/admin/api/2024-10/shop.json`, {
-      headers: { 
-        'X-Shopify-Access-Token': ctx.state.session.accessToken,
-        'Content-Type': 'application/json'
-      }
+    const client = new shopify.clients.Rest({
+      domain: ctx.state.shop,
+      accessToken: ctx.state.session.accessToken,
     });
     
-    if (!response.ok) {
-      throw new Error(`Shopify API error: ${response.status}`);
-    }
-    
-    const shopData = await response.json();
-    ctx.body = {
-      success: true,
-      shop: shopData.shop
-    };
-    
+    const response = await client.get({ path: 'shop' });
+    ctx.body = response.body.shop;
   } catch (error) {
-    console.error('Error fetching shop info:', error);
+    console.error('Shop API error:', error);
     ctx.status = 500;
-    ctx.body = 'Failed to fetch shop info: ' + error.message;
+    ctx.body = { error: 'Failed to load shop data' };
   }
 });
 
@@ -1506,14 +1555,23 @@ router.get('(/)', async (ctx) => {
     
     async function loadAppData() {
       try {
-        const response = await fetch('/api/shop?shop=' + shop);
+        // Use App Bridge authenticated fetch instead of plain fetch
+        const app = AppBridge.createApp({
+          apiKey: '${SHOPIFY_API_KEY}',
+          host: host,
+          forceRedirect: true,
+        });
+        
+        const authenticatedFetch = AppBridge.authenticatedFetch(app);
+        
+        const response = await authenticatedFetch('/api/shop?shop=' + shop);
         if (response.ok) {
           const data = await response.json();
           console.log('Shop data loaded:', data);
           document.getElementById('loading').style.display = 'none';
           
           // Only show "Активно" if we have a real active subscription
-          const billingStatusResponse = await fetch('/api/billing/status?shop=' + shop);
+          const billingStatusResponse = await authenticatedFetch('/api/billing/status?shop=' + shop);
           if (billingStatusResponse.ok) {
             const billingData = await billingStatusResponse.json();
             if (billingData.hasActiveSubscription) {
@@ -1540,7 +1598,15 @@ router.get('(/)', async (ctx) => {
     
     async function checkBillingStatus() {
       try {
-        const response = await fetch('/api/billing/status?shop=' + shop);
+        const app = AppBridge.createApp({
+          apiKey: '${SHOPIFY_API_KEY}',
+          host: host,
+          forceRedirect: true,
+        });
+        
+        const authenticatedFetch = AppBridge.authenticatedFetch(app);
+        
+        const response = await authenticatedFetch('/api/billing/status?shop=' + shop);
         if (response.ok) {
           const data = await response.json();
           billingStatus = data.hasActiveSubscription;
@@ -1569,7 +1635,16 @@ router.get('(/)', async (ctx) => {
     async function startBilling() {
       try {
         console.log('Starting billing request...');
-        const response = await fetch('/api/billing/create?shop=' + shop);
+        
+        const app = AppBridge.createApp({
+          apiKey: '${SHOPIFY_API_KEY}',
+          host: host,
+          forceRedirect: true,
+        });
+        
+        const authenticatedFetch = AppBridge.authenticatedFetch(app);
+        
+        const response = await authenticatedFetch('/api/billing/create?shop=' + shop);
         console.log('Response status:', response.status);
         console.log('Response headers:', response.headers);
         
