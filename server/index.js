@@ -652,29 +652,47 @@ router.get('/api/billing/create', authenticateRequest, async (ctx) => {
       accessToken: ctx.state.session.accessToken,
     });
     
-    const TEST_MODE = false; // Set to false for production billing
+    const TEST_MODE = process.env.NODE_ENV !== 'production';
     console.log('Test mode:', TEST_MODE);
     console.log('NODE_ENV:', process.env.NODE_ENV);
     
     // ВАЖНО: Този URL трябва да е добавен в Allowed redirection URLs в Partner Dashboard
-    const returnUrl = `${HOST}/api/billing/callback`;
+    const returnUrl = `${HOST}/api/billing/callback?shop=${ctx.state.shop}`;
     console.log('Billing return URL:', returnUrl);
     console.log('HOST:', HOST);
     
-    const mutation = `mutation {
-      appSubscriptionCreate(
-        name: "BGN/EUR Price Display"
-        trialDays: 5
-        test: ${TEST_MODE}
-        returnUrl: "${returnUrl}"
-        lineItems: [{
-          plan: {
-            appRecurringPricingDetails: {
-              price: { amount: 14.99, currencyCode: USD }
-              interval: EVERY_30_DAYS
-            }
+    // Build billing arguments
+    const billingArgs = {
+      name: "BGN/EUR Price Display",
+      trialDays: 5,
+      returnUrl: returnUrl,
+      lineItems: [{
+        plan: {
+          appRecurringPricingDetails: {
+            price: { amount: 14.99, currencyCode: "USD" },
+            interval: "EVERY_30_DAYS"
           }
-        }]
+        }
+      }],
+      // Only add test flag in development
+      ...(TEST_MODE && { test: true })
+    };
+    
+    console.log('Billing arguments:', billingArgs);
+    
+    const mutation = `mutation AppSubscriptionCreate(
+      $name: String!, 
+      $trialDays: Int!, 
+      $returnUrl: URL!, 
+      $test: Boolean, 
+      $lineItems: [AppSubscriptionLineItemInput!]!
+    ) {
+      appSubscriptionCreate(
+        name: $name, 
+        trialDays: $trialDays,
+        returnUrl: $returnUrl, 
+        test: $test,
+        lineItems: $lineItems
       ) {
         appSubscription {
           id
@@ -692,7 +710,8 @@ router.get('/api/billing/create', authenticateRequest, async (ctx) => {
     console.log('GraphQL mutation:', mutation);
     
     const response = await client.query({
-      data: mutation
+      data: mutation,
+      variables: billingArgs
     });
     
     console.log('GraphQL response status:', response.status);
@@ -725,15 +744,67 @@ router.get('/api/billing/create', authenticateRequest, async (ctx) => {
 });
 
 router.get('/api/billing/callback', authenticateRequest, async (ctx) => {
-  const { charge_id } = ctx.query;
+  const { charge_id, shop, host } = ctx.query;
   
   if (charge_id) {
     // Subscription was accepted
     console.log('Subscription activated:', charge_id);
-    ctx.redirect('/?billing=success');
+    
+    // For embedded apps, use App Bridge redirect
+    ctx.set('Content-Type', 'text/html');
+    ctx.body = `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Redirecting...</title>
+  <script src="https://unpkg.com/@shopify/app-bridge@2"></script>
+</head>
+<body>
+  <script>
+    const app = AppBridge.createApp({
+      apiKey: '${SHOPIFY_API_KEY}',
+      host: '${host}',
+      forceRedirect: true,
+    });
+    
+    AppBridge.actions.Redirect.create(app).dispatch(
+      AppBridge.actions.Redirect.Action.REMOTE,
+      '${HOST}/?shop=${shop}&host=${encodeURIComponent(host)}&billing=success'
+    );
+  </script>
+</body>
+</html>
+    `;
   } else {
     // Subscription was declined
-    ctx.redirect('/?billing=declined');
+    console.log('Subscription declined');
+    
+    ctx.set('Content-Type', 'text/html');
+    ctx.body = `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Redirecting...</title>
+  <script src="https://unpkg.com/@shopify/app-bridge@2"></script>
+</head>
+<body>
+  <script>
+    const app = AppBridge.createApp({
+      apiKey: '${SHOPIFY_API_KEY}',
+      host: '${host}',
+      forceRedirect: true,
+    });
+    
+    AppBridge.actions.Redirect.create(app).dispatch(
+      AppBridge.actions.Redirect.Action.REMOTE,
+      '${HOST}/?shop=${shop}&host=${encodeURIComponent(host)}&billing=declined'
+    );
+  </script>
+</body>
+</html>
+    `;
   }
 });
 
@@ -1560,8 +1631,17 @@ router.get('(/)', async (ctx) => {
     // Check URL parameters for billing status
     if (urlParams.get('billing') === 'success') {
       alert('🎉 Успешно активирахте плана! Вече можете да използвате всички функции.');
+      // Clean up URL parameters
+      history.replaceState({}, '', window.location.pathname);
+      // Hide billing modal if it exists
+      const billingOverlay = document.getElementById('billing-overlay');
+      if (billingOverlay) {
+        billingOverlay.style.display = 'none';
+      }
     } else if (urlParams.get('billing') === 'declined') {
       alert('❌ Плащането беше отказано. Моля опитайте отново.');
+      // Clean up URL parameters
+      history.replaceState({}, '', window.location.pathname);
     }
     
     setTimeout(loadAppData, 1000);
