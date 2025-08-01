@@ -76,7 +76,7 @@ const shopify = shopifyApi({
   apiVersion: '2024-10',
   isEmbeddedApp: true,
   sessionStorage: memorySessionStorage,
-  // Enable token exchange for managed install
+  // For public apps, we need to handle both online and offline tokens
   useOnlineTokens: false,
   // Enable managed pricing support
   future: {
@@ -338,7 +338,19 @@ async function authenticateRequest(ctx, next) {
     console.log('Session:', { id: s.id, isOnline: s.isOnline, hasAccessToken: !!s.accessToken });
   });
   
-  let session = sessions.find(s => !s.isOnline);
+  // For public apps, we need to check both online and offline sessions
+  let session = sessions.find(s => !s.isOnline); // Offline session (preferred)
+  
+  if (!session) {
+    console.log('No offline session found, checking for online session...');
+    session = sessions.find(s => s.isOnline); // Online session (fallback)
+  }
+  
+  console.log('Selected session:', {
+    id: session?.id,
+    isOnline: session?.isOnline,
+    hasAccessToken: !!session?.accessToken
+  });
   
   if (!session || !session.accessToken || session.accessToken === 'placeholder') {
     console.log('No valid session with access token, performing token exchange...');
@@ -411,7 +423,13 @@ async function authenticateRequest(ctx, next) {
       console.error('2. Set App URL to:', HOST_NAME || HOST);
       console.error('3. Add callback URL:', `${HOST_NAME || HOST}/auth/callback`);
       console.error('4. Ensure all required scopes are added:', requiredScopes);
-      console.error('5. Reinstall the app in your store');
+      console.error('5. For Public Apps: Check App Store listing configuration');
+      console.error('6. Reinstall the app in your store');
+      console.error('');
+      console.error('PUBLIC APP SPECIFIC:');
+      console.error('- App is published in App Store');
+      console.error('- Users install via App Store, not Partner Dashboard');
+      console.error('- Check App Store listing for correct configuration');
         ctx.status = 500;
         ctx.body = 'Token exchange failed - no access token';
         return;
