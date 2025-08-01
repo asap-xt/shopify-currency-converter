@@ -235,8 +235,6 @@ router.get('/session-token-bounce', async (ctx) => {
   `;
 });
 
-// Добавете този route СЛЕД session token bounce page route:
-
 // OAuth callback route за Managed Install
 router.get('/auth/callback', async (ctx) => {
   console.log('=== AUTH CALLBACK ===');
@@ -264,112 +262,6 @@ router.get('/auth/callback', async (ctx) => {
     ctx.status = 500;
     ctx.body = 'Authentication failed';
   }
-});
-
-// Обновен main route с подобрена проверка за subscription
-router.get('(/)', authenticateRequest, async (ctx) => {
-  console.log('=== MAIN ROUTE ===');
-  const shop = ctx.query.shop;
-  const host = ctx.query.host;
-  
-  if (!shop) {
-    ctx.body = "Missing shop parameter. Please install the app through Shopify.";
-    ctx.status = 400;
-    return;
-  }
-  
-  // Проверка за subscription при първо зареждане
-  try {
-    const client = new shopify.api.clients.Graphql({
-      session: ctx.state.session,
-    });
-    
-    const response = await client.query({
-      data: `{
-        currentAppInstallation {
-          id
-          activeSubscriptions {
-            id
-            status
-            name
-          }
-        }
-      }`
-    });
-    
-    const subscriptions = response.body.data.currentAppInstallation.activeSubscriptions || [];
-    const hasActiveSubscription = subscriptions.some(sub => 
-      sub.status === 'ACTIVE' || sub.status === 'PENDING'
-    );
-    
-    console.log('Subscription check:', { 
-      hasActiveSubscription, 
-      subscriptionsCount: subscriptions.length 
-    });
-    
-    // Ако няма subscription И това е нова инсталация
-    if (!hasActiveSubscription && ctx.query.billing !== 'declined') {
-      const storeHandle = shop.replace('.myshopify.com', '');
-      const appHandle = 'bgn2eur-price-display';
-      
-      // За Managed Pricing използваме директния URL
-      const planSelectionUrl = `https://admin.shopify.com/store/${storeHandle}/charges/${appHandle}/pricing_plans`;
-      
-      console.log('Redirecting to plan selection:', planSelectionUrl);
-      
-      // Използваме App Bridge за по-гладък redirect
-      ctx.set('Content-Type', 'text/html');
-      ctx.body = `
-        <!DOCTYPE html>
-        <html>
-        <head>
-          <meta charset="utf-8">
-          <title>Select a plan - BGN/EUR Price Display</title>
-          <meta name="shopify-api-key" content="${SHOPIFY_API_KEY}" />
-          <script src="https://cdn.shopify.com/shopifycloud/app-bridge.js"></script>
-        </head>
-        <body>
-          <div style="text-align: center; padding: 50px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;">
-            <h2>Almost there!</h2>
-            <p>Please select a plan to continue using BGN/EUR Price Display</p>
-            <p style="color: #666;">Redirecting to plan selection...</p>
-          </div>
-          <script>
-            // Initialize App Bridge
-            var AppBridge = window['app-bridge'];
-            var actions = AppBridge.actions;
-            var createApp = AppBridge.default;
-            
-            var app = createApp({
-              apiKey: '${SHOPIFY_API_KEY}',
-              host: '${host || ''}',
-              forceRedirect: true
-            });
-            
-            // Use Redirect action for embedded apps
-            var redirect = actions.Redirect.create(app);
-            
-            // Small delay to show the message
-            setTimeout(function() {
-              redirect.dispatch(
-                actions.Redirect.Action.REMOTE,
-                '${planSelectionUrl}'
-              );
-            }, 1500);
-          </script>
-        </body>
-        </html>
-      `;
-      return;
-    }
-  } catch (error) {
-    console.error('Subscription check error:', error);
-    // При грешка продължаваме с зареждането
-  }
-  
-  // Нормално зареждане на приложението
-  ctx.set('Content-Type', 'text/html');
-  ctx.body = `...съществуващия HTML код...`;
 });
 
 // Middleware за автентикация чрез Token Exchange
@@ -460,7 +352,8 @@ async function authenticateRequest(ctx, next) {
 // Billing check middleware - SIMPLIFIED FOR MANAGED PRICING
 async function requiresSubscription(ctx, next) {
   try {
-    const client = new shopify.api.clients.Graphql({
+    const { GraphqlClient } = await import('@shopify/shopify-api');
+    const client = new GraphqlClient({
       session: ctx.state.session,
     });
     
@@ -493,7 +386,7 @@ async function requiresSubscription(ctx, next) {
     if (ctx.path === '/' && !hasActiveSubscription) {
       const shop = ctx.state.shop;
       const storeHandle = shop.replace('.myshopify.com', '');
-      const appHandle = 'bgn2eur-price-display'; // От shopify.app.toml
+      const appHandle = 'bgn2eur-price-display';
       
       const planSelectionUrl = `https://admin.shopify.com/store/${storeHandle}/charges/${appHandle}/pricing_plans`;
       
@@ -538,7 +431,8 @@ router.get('/api/billing/callback', authenticateRequest, async (ctx) => {
 // Check subscription status endpoint
 router.get('/api/billing/status', authenticateRequest, async (ctx) => {
   try {
-    const client = new shopify.api.clients.Graphql({
+    const { GraphqlClient } = await import('@shopify/shopify-api');
+    const client = new GraphqlClient({
       session: ctx.state.session,
     });
     
@@ -640,8 +534,8 @@ router.get('/api/orders', authenticateRequest, requiresSubscription, async (ctx)
   }
 });
 
-// Main app route - SIMPLIFIED WITHOUT CUSTOM BILLING UI
-router.get('(/)', authenticateRequest, requiresSubscription, async (ctx) => {
+// Main app route - with subscription check
+router.get('(/)', authenticateRequest, async (ctx) => {
   console.log('=== MAIN ROUTE ===');
   const shop = ctx.query.shop;
   const host = ctx.query.host;
@@ -652,6 +546,92 @@ router.get('(/)', authenticateRequest, requiresSubscription, async (ctx) => {
     return;
   }
   
+  // Проверка за subscription при първо зареждане
+  try {
+    const { GraphqlClient } = await import('@shopify/shopify-api');
+    const client = new GraphqlClient({
+      session: ctx.state.session,
+    });
+    
+    const response = await client.query({
+      data: `{
+        currentAppInstallation {
+          id
+          activeSubscriptions {
+            id
+            status
+            name
+          }
+        }
+      }`
+    });
+    
+    const subscriptions = response.body.data.currentAppInstallation.activeSubscriptions || [];
+    const hasActiveSubscription = subscriptions.some(sub => 
+      sub.status === 'ACTIVE' || sub.status === 'PENDING'
+    );
+    
+    console.log('Subscription check:', { 
+      hasActiveSubscription, 
+      subscriptionsCount: subscriptions.length 
+    });
+    
+    // Ако няма subscription И това е нова инсталация
+    if (!hasActiveSubscription && ctx.query.billing !== 'declined') {
+      const storeHandle = shop.replace('.myshopify.com', '');
+      const appHandle = 'bgn2eur-price-display';
+      
+      const planSelectionUrl = `https://admin.shopify.com/store/${storeHandle}/charges/${appHandle}/pricing_plans`;
+      
+      console.log('Redirecting to plan selection:', planSelectionUrl);
+      
+      ctx.set('Content-Type', 'text/html');
+      ctx.body = `
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <meta charset="utf-8">
+          <title>Select a plan - BGN/EUR Price Display</title>
+          <meta name="shopify-api-key" content="${SHOPIFY_API_KEY}" />
+          <script src="https://cdn.shopify.com/shopifycloud/app-bridge.js"></script>
+        </head>
+        <body>
+          <div style="text-align: center; padding: 50px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;">
+            <h2>Almost there!</h2>
+            <p>Please select a plan to continue using BGN/EUR Price Display</p>
+            <p style="color: #666;">Redirecting to plan selection...</p>
+          </div>
+          <script>
+            var AppBridge = window['app-bridge'];
+            var actions = AppBridge.actions;
+            var createApp = AppBridge.default;
+            
+            var app = createApp({
+              apiKey: '${SHOPIFY_API_KEY}',
+              host: '${host || ''}',
+              forceRedirect: true
+            });
+            
+            var redirect = actions.Redirect.create(app);
+            
+            setTimeout(function() {
+              redirect.dispatch(
+                actions.Redirect.Action.REMOTE,
+                '${planSelectionUrl}'
+              );
+            }, 1500);
+          </script>
+        </body>
+        </html>
+      `;
+      return;
+    }
+  } catch (error) {
+    console.error('Subscription check error:', error);
+    // При грешка продължаваме с зареждането
+  }
+  
+  // Нормално зареждане на приложението
   ctx.set('Content-Type', 'text/html');
   ctx.body = `
 <!DOCTYPE html>
