@@ -532,22 +532,32 @@ async function checkBillingOnAppLoad(ctx, next) {
 // Billing check middleware for API endpoints
 async function requiresSubscription(ctx, next) {
   console.log('=== REQUIRES SUBSCRIPTION ===');
-  console.log('Session object:', ctx.state.session);
-  console.log('Session type:', typeof ctx.state.session);
+  
+  // Load current session using Shopify API - use offline sessions for billing
+  let session;
+  try {
+    session = await shopify.session.loadCurrentSession(ctx.req, ctx.res, false); // false for offline sessions
+    console.log('Loaded offline session for subscription check:', session);
+    console.log('Session shop:', session?.shop);
+    console.log('Session accessToken:', session?.accessToken ? 'EXISTS' : 'MISSING');
+  } catch (error) {
+    console.error('Error loading offline session for subscription check:', error);
+    session = null;
+  }
   
   // Check if session exists
-  if (!ctx.state.session) {
-    console.log('No session found in requiresSubscription');
+  if (!session || !session.accessToken) {
+    console.log('No valid offline session found in requiresSubscription');
     ctx.status = 401;
-    ctx.body = { error: 'No session found' };
+    ctx.body = { error: 'No valid session found' };
     return;
   }
   
   try {
     console.log('Creating GraphqlClient for subscription check...');
     const client = new shopify.clients.Graphql({
-      domain: ctx.state.shop,
-      accessToken: ctx.state.session.accessToken,
+      domain: session.shop,
+      accessToken: session.accessToken,
     });
     
     // Check for active subscriptions
@@ -605,24 +615,23 @@ async function requiresSubscription(ctx, next) {
 router.get('/api/billing/create', authenticateRequest, async (ctx) => {
   console.log('=== BILLING CREATE ===');
   console.log('Shop:', ctx.state.shop);
-  console.log('Session object:', ctx.state.session);
-  console.log('Session type:', typeof ctx.state.session);
-  console.log('Has access token:', !!ctx.state.session?.accessToken);
-  console.log('Access token value:', ctx.state.session?.accessToken);
+  console.log('Cookies:', ctx.cookies.get('shopify.session'));
   
-  // Load current session using Shopify API
+  // Load current session using Shopify API - use offline sessions for billing
   let session;
   try {
     session = await shopify.session.loadCurrentSession(ctx.req, ctx.res, false); // false for offline sessions
-    console.log('Loaded session:', session);
+    console.log('Loaded offline session:', session);
+    console.log('Session shop:', session?.shop);
+    console.log('Session accessToken:', session?.accessToken ? 'EXISTS' : 'MISSING');
   } catch (error) {
-    console.error('Error loading session:', error);
+    console.error('Error loading offline session:', error);
     session = null;
   }
   
   // Check if session exists
   if (!session || !session.accessToken) {
-    console.log('No valid session found, redirecting to OAuth');
+    console.log('No valid offline session found, redirecting to OAuth');
     const authUrl = `https://${ctx.state.shop}/admin/oauth/authorize?` + 
       `client_id=${SHOPIFY_API_KEY}&` +
       `scope=${SCOPES}&` +
@@ -638,7 +647,7 @@ router.get('/api/billing/create', authenticateRequest, async (ctx) => {
   }
   
   try {
-    console.log('Creating GraphqlClient with access token...');
+    console.log('Creating GraphqlClient with offline access token...');
     
     // Use the correct method to create GraphQL client
     const client = new shopify.clients.Graphql({
