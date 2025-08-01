@@ -531,8 +531,21 @@ async function checkBillingOnAppLoad(ctx, next) {
 
 // Billing check middleware for API endpoints
 async function requiresSubscription(ctx, next) {
+  console.log('=== REQUIRES SUBSCRIPTION ===');
+  console.log('Session object:', ctx.state.session);
+  console.log('Session type:', typeof ctx.state.session);
+  
+  // Check if session exists
+  if (!ctx.state.session) {
+    console.log('No session found in requiresSubscription');
+    ctx.status = 401;
+    ctx.body = { error: 'No session found' };
+    return;
+  }
+  
   try {
-    const client = new GraphqlClient({
+    console.log('Creating GraphqlClient for subscription check...');
+    const client = new shopify.clients.Graphql({
       domain: ctx.state.shop,
       accessToken: ctx.state.session.accessToken,
     });
@@ -597,8 +610,16 @@ router.get('/api/billing/create', authenticateRequest, async (ctx) => {
   console.log('Has access token:', !!ctx.state.session?.accessToken);
   console.log('Access token value:', ctx.state.session?.accessToken);
   
+  // Check if session exists
+  if (!ctx.state.session) {
+    console.log('No session object found');
+    ctx.status = 500;
+    ctx.body = { error: 'No session found. Please authenticate first.' };
+    return;
+  }
+  
   // If no access token, redirect to OAuth
-  if (!ctx.state.session?.accessToken) {
+  if (!ctx.state.session.accessToken) {
     console.log('No access token, redirecting to OAuth');
     const authUrl = `https://${ctx.state.shop}/admin/oauth/authorize?` + 
       `client_id=${SHOPIFY_API_KEY}&` +
