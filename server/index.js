@@ -1133,10 +1133,19 @@ router.get('/debug', async (ctx) => {
       nodeVersion: process.version,
       hasShopifyKey: !!SHOPIFY_API_KEY,
       scopes: SCOPES,
-      host: HOST
+      host: HOST,
+      hostName: HOST_NAME
     },
     sessions: allSessions,
-    totalSessions: allSessions.length
+    totalSessions: allSessions.length,
+    shopifyConfig: {
+      apiKey: SHOPIFY_API_KEY ? 'SET' : 'NOT SET',
+      apiSecretKey: SHOPIFY_API_SECRET ? 'SET' : 'NOT SET',
+      scopes: SCOPES.split(','),
+      hostName: HOST_NAME || HOST,
+      isEmbeddedApp: true,
+      useOnlineTokens: false
+    }
   };
 });
 
@@ -1195,6 +1204,45 @@ router.get('/debug/billing/:shop', async (ctx) => {
       error: error.message,
       shop: shop
     };
+  }
+});
+
+// Installation check endpoint
+router.get('/api/installation/check', async (ctx) => {
+  const { shop } = ctx.query;
+  
+  if (!shop) {
+    ctx.status = 400;
+    ctx.body = { error: 'Missing shop parameter' };
+    return;
+  }
+  
+  try {
+    const sessions = await memorySessionStorage.findSessionsByShop(shop);
+    const offlineSession = sessions.find(s => !s.isOnline);
+    
+    ctx.body = {
+      shop: shop,
+      hasOfflineSession: !!offlineSession,
+      hasAccessToken: !!offlineSession?.accessToken,
+      sessionDetails: offlineSession ? {
+        id: offlineSession.id,
+        shop: offlineSession.shop,
+        isOnline: offlineSession.isOnline,
+        hasAccessToken: !!offlineSession.accessToken,
+        scope: offlineSession.scope
+      } : null,
+      totalSessions: sessions.length,
+      allSessions: sessions.map(s => ({
+        id: s.id,
+        shop: s.shop,
+        isOnline: s.isOnline,
+        hasAccessToken: !!s.accessToken
+      }))
+    };
+  } catch (error) {
+    ctx.status = 500;
+    ctx.body = { error: error.message };
   }
 });
 
