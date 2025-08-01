@@ -368,12 +368,13 @@ async function authenticateRequest(ctx, next) {
   const dest = new URL(decodedSessionToken.dest);
   const shop = dest.hostname;
   
-  console.log('Shop validation:', {
-    originalDest: decodedSessionToken.dest,
-    extractedShop: shop,
-    isValidShop: shop.includes('.myshopify.com') || shop.includes('.shopify.com'),
-    shopLength: shop.length
-  });
+        console.log('Shop validation:', {
+        originalDest: decodedSessionToken.dest,
+        extractedShop: shop,
+        isValidShop: shop.includes('.myshopify.com') || shop.includes('.shopify.com'),
+        shopLength: shop.length,
+        shopParts: shop.split('.')
+      });
   
   const sessions = await memorySessionStorage.findSessionsByShop(shop);
   console.log('Found sessions for shop:', shop, 'Count:', sessions.length);
@@ -433,7 +434,8 @@ async function authenticateRequest(ctx, next) {
         length: encodedSessionToken.length,
         startsWith: encodedSessionToken.substring(0, 10),
         containsDots: (encodedSessionToken.match(/\./g) || []).length,
-        isValidFormat: /^[A-Za-z0-9+/=]+$/.test(encodedSessionToken)
+        isValidFormat: /^[A-Za-z0-9+/=.-]+$/.test(encodedSessionToken),
+        isJWTFormat: encodedSessionToken.split('.').length === 3
       });
       
       console.log('Token exchange parameters:', {
@@ -447,8 +449,8 @@ async function authenticateRequest(ctx, next) {
       
       // Additional validation for token exchange
       console.log('Token exchange validation:', {
-        shopIsValid: shop && shop.includes('.myshopify.com'),
-        sessionTokenIsValid: encodedSessionToken && encodedSessionToken.length > 100,
+        shopIsValid: shop && (shop.includes('.myshopify.com') || shop.includes('.shopify.com')),
+        sessionTokenIsValid: encodedSessionToken && encodedSessionToken.length > 100 && encodedSessionToken.split('.').length === 3,
         apiKeyIsSet: !!SHOPIFY_API_KEY,
         apiSecretIsSet: !!SHOPIFY_API_SECRET,
         scopesAreSet: !!SCOPES,
