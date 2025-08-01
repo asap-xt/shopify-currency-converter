@@ -6,7 +6,7 @@ import koaSession from 'koa-session';
 import Router from 'koa-router';
 import crypto from 'crypto';
 import getRawBody from 'raw-body';
-import { shopifyApi, LATEST_API_VERSION, Session, GraphqlClient } from '@shopify/shopify-api';
+import { shopifyApi, LATEST_API_VERSION, Session } from '@shopify/shopify-api';
 
 // Environment check
 console.log('=== Environment Variables Check ===');
@@ -350,7 +350,8 @@ async function requiresSubscription(ctx, next) {
   try {
     // Използваме shopify instance вместо да импортираме GraphqlClient
     const client = new shopify.clients.Graphql({
-      session: ctx.state.session,
+      domain: ctx.state.session.shop,
+      accessToken: ctx.state.session.accessToken,
     });
     
     const response = await client.query({
@@ -428,7 +429,8 @@ router.get('/api/billing/callback', authenticateRequest, async (ctx) => {
 router.get('/api/billing/status', authenticateRequest, async (ctx) => {
   try {
     const client = new shopify.clients.Graphql({
-      session: ctx.state.session,
+      domain: ctx.state.session.shop,
+      accessToken: ctx.state.session.accessToken,
     });
     
     const response = await client.query({
@@ -544,7 +546,8 @@ router.get('(/)', authenticateRequest, async (ctx) => {
   // Проверка за subscription при първо зареждане
   try {
     const client = new shopify.clients.Graphql({
-      session: ctx.state.session,
+      domain: ctx.state.session.shop,
+      accessToken: ctx.state.session.accessToken,
     });
     
     const response = await client.query({
@@ -1086,7 +1089,8 @@ router.get('/debug/billing/:shop', async (ctx) => {
     }
     
     const client = new shopify.clients.Graphql({
-      session: offlineSession,
+      domain: offlineSession.shop,
+      accessToken: offlineSession.accessToken,
     });
     
     const response = await client.query({
