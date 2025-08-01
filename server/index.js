@@ -250,8 +250,6 @@ router.get('/session-token-bounce', async (ctx) => {
 // Middleware за автентикация чрез Token Exchange
 async function authenticateRequest(ctx, next) {
   console.log('=== AUTHENTICATING REQUEST ===');
-  console.log('Path:', ctx.path);
-  console.log('Method:', ctx.method);
   
   let encodedSessionToken = null;
   let decodedSessionToken = null;
@@ -309,8 +307,6 @@ async function authenticateRequest(ctx, next) {
       console.log('API Secret set:', !!SHOPIFY_API_SECRET);
       console.log('Host name:', HOST_NAME);
       console.log('Scopes:', SCOPES);
-      console.log('Request path:', ctx.path);
-      console.log('Request method:', ctx.method);
       
       const tokenExchangeResult = await shopify.auth.tokenExchange({
         shop: shop,
@@ -345,11 +341,8 @@ async function authenticateRequest(ctx, next) {
       });
       
       await memorySessionStorage.storeSession(session);
-      console.log('Session stored with ID:', sessionId);
-      console.log('Session storage size:', memorySessionStorage.storage.size);
-      console.log('Session exists in storage:', memorySessionStorage.storage.has(sessionId));
       
-    } catch (error) {
+          } catch (error) {
         console.error('Token exchange failed:', error);
         console.error('Error details:', {
           message: error.message,
@@ -404,13 +397,6 @@ async function requiresSubscription(ctx, next) {
     const subscriptions = response.body.data.currentAppInstallation.activeSubscriptions || [];
     const hasActiveSubscription = subscriptions.some(sub => sub.status === 'ACTIVE');
     
-    console.log('=== SUBSCRIPTION CHECK ===');
-    console.log('Found subscriptions:', subscriptions.length);
-    subscriptions.forEach(sub => {
-      console.log('Subscription:', { id: sub.id, status: sub.status, trialDays: sub.trialDays });
-    });
-    console.log('Has active subscription:', hasActiveSubscription);
-    
     ctx.state.hasActiveSubscription = hasActiveSubscription;
     
     // Always allow access to billing endpoints
@@ -428,15 +414,16 @@ async function requiresSubscription(ctx, next) {
     await next();
   } catch (error) {
     console.error('Subscription check error:', error);
-    console.error('Error details:', {
-      message: error.message,
-      statusCode: error.response?.statusCode,
-      body: error.response?.body
-    });
     // Allow access on error to prevent blocking
     await next();
   }
 }
+
+router.get("/billing/confirm", (req, res) => {
+  const { shop } = req.query;
+  ACTIVE_SUBSCRIPTION[shop] = true; // Запази статуса (тук в паметта)
+  res.send("Абонаментът е активиран! 🎉 Можеш да ползваш приложението.");
+});
 
 // Billing endpoints
 router.get('/api/billing/create', authenticateRequest, async (ctx) => {
@@ -484,9 +471,6 @@ router.get('/api/billing/create', authenticateRequest, async (ctx) => {
       }`
     });
     
-    console.log('=== BILLING RESPONSE ===');
-    console.log('Response body:', JSON.stringify(response.body, null, 2));
-    
     const { confirmationUrl, userErrors } = response.body.data.appSubscriptionCreate;
     
     if (userErrors?.length > 0) {
@@ -496,7 +480,6 @@ router.get('/api/billing/create', authenticateRequest, async (ctx) => {
       return;
     }
     
-    console.log('Confirmation URL:', confirmationUrl);
     ctx.body = { confirmationUrl };
   } catch (error) {
     console.error('Create subscription error:', error);
@@ -506,9 +489,6 @@ router.get('/api/billing/create', authenticateRequest, async (ctx) => {
 });
 
 router.get('/api/billing/callback', authenticateRequest, async (ctx) => {
-  console.log('=== BILLING CALLBACK ===');
-  console.log('Query params:', ctx.query);
-  
   const { charge_id } = ctx.query;
   
   if (charge_id) {
@@ -517,17 +497,12 @@ router.get('/api/billing/callback', authenticateRequest, async (ctx) => {
     ctx.redirect('/?billing=success');
   } else {
     // Subscription was declined
-    console.log('Subscription declined');
     ctx.redirect('/?billing=declined');
   }
 });
 
 // Check subscription status endpoint
 router.get('/api/billing/status', authenticateRequest, requiresSubscription, async (ctx) => {
-  console.log('=== BILLING STATUS ===');
-  console.log('Has active subscription:', ctx.state.hasActiveSubscription);
-  console.log('Shop:', ctx.state.shop);
-  
   ctx.body = {
     hasActiveSubscription: ctx.state.hasActiveSubscription,
     shop: ctx.state.shop
@@ -547,13 +522,6 @@ router.get('/api/test', authenticateRequest, async (ctx) => {
 
 router.get('/api/shop', authenticateRequest, requiresSubscription, async (ctx) => {
   console.log('=== SHOP INFO API ===');
-  console.log('Session:', {
-    id: ctx.state.session?.id,
-    shop: ctx.state.session?.shop,
-    isOnline: ctx.state.session?.isOnline,
-    hasToken: !!ctx.state.session?.accessToken && ctx.state.session?.accessToken !== 'placeholder'
-  });
-  console.log('Has active subscription:', ctx.state.hasActiveSubscription);
   
   try {
     const response = await fetch(`https://${ctx.state.shop}/admin/api/2024-10/shop.json`, {
@@ -582,13 +550,6 @@ router.get('/api/shop', authenticateRequest, requiresSubscription, async (ctx) =
 
 router.get('/api/orders', authenticateRequest, requiresSubscription, async (ctx) => {
   console.log('=== ORDERS API TEST ===');
-  console.log('Session:', {
-    id: ctx.state.session?.id,
-    shop: ctx.state.session?.shop,
-    isOnline: ctx.state.session?.isOnline,
-    hasToken: !!ctx.state.session?.accessToken && ctx.state.session?.accessToken !== 'placeholder'
-  });
-  console.log('Has active subscription:', ctx.state.hasActiveSubscription);
   
   try {
     const response = await fetch(`https://${ctx.state.shop}/admin/api/2024-10/orders.json?limit=10`, {
@@ -617,19 +578,84 @@ router.get('/api/orders', authenticateRequest, requiresSubscription, async (ctx)
   }
 });
 
+const APP_PLAN_NAME = "Pro Plan";
+const APP_PRICE = 14.99;
+const CURRENCY = "USD";
+let ACTIVE_SUBSCRIPTION = {}; // тестово — в реално приложение запази в база
+
+// 🚀 1. Route след install (Shopify ще пренасочи тук)
+router.get("/auth/callback", async (req, res) => {
+  const { shop, code } = req.query;
+
+  // Обменяме code за access token
+  const tokenResp = await fetch(
+    `https://${shop}/admin/oauth/access_token`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        client_id: SHOPIFY_API_KEY,
+        client_secret: SHOPIFY_API_SECRET,
+        code,
+      }),
+    }
+  );
+  const tokenData = await tokenResp.json();
+  const accessToken = tokenData.access_token;
+
+  // 2. Създаваме Subscription (ако няма вече активен)
+  if (!ACTIVE_SUBSCRIPTION[shop]) {
+    const subscriptionResp = await fetch(
+      `https://${shop}/admin/api/2024-07/graphql.json`,
+      {
+        method: "POST",
+        headers: {
+          "X-Shopify-Access-Token": accessToken,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          query: `
+            mutation {
+              appSubscriptionCreate(
+                name: "${APP_PLAN_NAME}"
+                returnUrl: "${HOST}/billing/confirm?shop=${shop}"
+                lineItems: [{
+                  plan: {
+                    appRecurringPricingDetails: {
+                      price: { amount: ${APP_PRICE}, currencyCode: ${CURRENCY} }
+                      interval: EVERY_30_DAYS
+                    }
+                  }
+                }]
+              ) {
+                confirmationUrl
+                appSubscription { id }
+                userErrors { message }
+              }
+            }
+          `,
+        }),
+      }
+    );
+    const subData = await subscriptionResp.json();
+    const confirmationUrl = subData.data.appSubscriptionCreate.confirmationUrl;
+
+    return res.redirect(confirmationUrl);
+  }
+
+  // ако вече има активен абонамент
+  res.redirect(`${HOST}/?shop=${shop}`);
+});
+
 // Main app route
-router.get('(/)', authenticateRequest, requiresSubscription, async (ctx) => {
+router.get('(/)', async (ctx) => {
   console.log('=== MAIN ROUTE ===');
-  console.log('Session:', {
-    id: ctx.state.session?.id,
-    shop: ctx.state.session?.shop,
-    isOnline: ctx.state.session?.isOnline,
-    hasToken: !!ctx.state.session?.accessToken && ctx.state.session?.accessToken !== 'placeholder'
-  });
-  console.log('Has active subscription:', ctx.state.hasActiveSubscription);
-  
   const shop = ctx.query.shop;
   const host = ctx.query.host;
+  
+  if (!ACTIVE_SUBSCRIPTION[shop]) {
+    console.log("Нямаш активен абонамент.");
+  }
   
   if (!shop) {
     ctx.body = "Missing shop parameter. Please install the app through Shopify.";
