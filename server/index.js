@@ -250,6 +250,8 @@ router.get('/session-token-bounce', async (ctx) => {
 // Middleware за автентикация чрез Token Exchange
 async function authenticateRequest(ctx, next) {
   console.log('=== AUTHENTICATING REQUEST ===');
+  console.log('Path:', ctx.path);
+  console.log('Method:', ctx.method);
   
   let encodedSessionToken = null;
   let decodedSessionToken = null;
@@ -307,6 +309,8 @@ async function authenticateRequest(ctx, next) {
       console.log('API Secret set:', !!SHOPIFY_API_SECRET);
       console.log('Host name:', HOST_NAME);
       console.log('Scopes:', SCOPES);
+      console.log('Request path:', ctx.path);
+      console.log('Request method:', ctx.method);
       
       const tokenExchangeResult = await shopify.auth.tokenExchange({
         shop: shop,
@@ -341,8 +345,11 @@ async function authenticateRequest(ctx, next) {
       });
       
       await memorySessionStorage.storeSession(session);
+      console.log('Session stored with ID:', sessionId);
+      console.log('Session storage size:', memorySessionStorage.storage.size);
+      console.log('Session exists in storage:', memorySessionStorage.storage.has(sessionId));
       
-          } catch (error) {
+    } catch (error) {
         console.error('Token exchange failed:', error);
         console.error('Error details:', {
           message: error.message,
@@ -397,6 +404,13 @@ async function requiresSubscription(ctx, next) {
     const subscriptions = response.body.data.currentAppInstallation.activeSubscriptions || [];
     const hasActiveSubscription = subscriptions.some(sub => sub.status === 'ACTIVE');
     
+    console.log('=== SUBSCRIPTION CHECK ===');
+    console.log('Found subscriptions:', subscriptions.length);
+    subscriptions.forEach(sub => {
+      console.log('Subscription:', { id: sub.id, status: sub.status, trialDays: sub.trialDays });
+    });
+    console.log('Has active subscription:', hasActiveSubscription);
+    
     ctx.state.hasActiveSubscription = hasActiveSubscription;
     
     // Always allow access to billing endpoints
@@ -414,6 +428,11 @@ async function requiresSubscription(ctx, next) {
     await next();
   } catch (error) {
     console.error('Subscription check error:', error);
+    console.error('Error details:', {
+      message: error.message,
+      statusCode: error.response?.statusCode,
+      body: error.response?.body
+    });
     // Allow access on error to prevent blocking
     await next();
   }
@@ -465,6 +484,9 @@ router.get('/api/billing/create', authenticateRequest, async (ctx) => {
       }`
     });
     
+    console.log('=== BILLING RESPONSE ===');
+    console.log('Response body:', JSON.stringify(response.body, null, 2));
+    
     const { confirmationUrl, userErrors } = response.body.data.appSubscriptionCreate;
     
     if (userErrors?.length > 0) {
@@ -474,6 +496,7 @@ router.get('/api/billing/create', authenticateRequest, async (ctx) => {
       return;
     }
     
+    console.log('Confirmation URL:', confirmationUrl);
     ctx.body = { confirmationUrl };
   } catch (error) {
     console.error('Create subscription error:', error);
@@ -483,6 +506,9 @@ router.get('/api/billing/create', authenticateRequest, async (ctx) => {
 });
 
 router.get('/api/billing/callback', authenticateRequest, async (ctx) => {
+  console.log('=== BILLING CALLBACK ===');
+  console.log('Query params:', ctx.query);
+  
   const { charge_id } = ctx.query;
   
   if (charge_id) {
@@ -491,12 +517,17 @@ router.get('/api/billing/callback', authenticateRequest, async (ctx) => {
     ctx.redirect('/?billing=success');
   } else {
     // Subscription was declined
+    console.log('Subscription declined');
     ctx.redirect('/?billing=declined');
   }
 });
 
 // Check subscription status endpoint
 router.get('/api/billing/status', authenticateRequest, requiresSubscription, async (ctx) => {
+  console.log('=== BILLING STATUS ===');
+  console.log('Has active subscription:', ctx.state.hasActiveSubscription);
+  console.log('Shop:', ctx.state.shop);
+  
   ctx.body = {
     hasActiveSubscription: ctx.state.hasActiveSubscription,
     shop: ctx.state.shop
@@ -516,6 +547,13 @@ router.get('/api/test', authenticateRequest, async (ctx) => {
 
 router.get('/api/shop', authenticateRequest, requiresSubscription, async (ctx) => {
   console.log('=== SHOP INFO API ===');
+  console.log('Session:', {
+    id: ctx.state.session?.id,
+    shop: ctx.state.session?.shop,
+    isOnline: ctx.state.session?.isOnline,
+    hasToken: !!ctx.state.session?.accessToken && ctx.state.session?.accessToken !== 'placeholder'
+  });
+  console.log('Has active subscription:', ctx.state.hasActiveSubscription);
   
   try {
     const response = await fetch(`https://${ctx.state.shop}/admin/api/2024-10/shop.json`, {
@@ -544,6 +582,13 @@ router.get('/api/shop', authenticateRequest, requiresSubscription, async (ctx) =
 
 router.get('/api/orders', authenticateRequest, requiresSubscription, async (ctx) => {
   console.log('=== ORDERS API TEST ===');
+  console.log('Session:', {
+    id: ctx.state.session?.id,
+    shop: ctx.state.session?.shop,
+    isOnline: ctx.state.session?.isOnline,
+    hasToken: !!ctx.state.session?.accessToken && ctx.state.session?.accessToken !== 'placeholder'
+  });
+  console.log('Has active subscription:', ctx.state.hasActiveSubscription);
   
   try {
     const response = await fetch(`https://${ctx.state.shop}/admin/api/2024-10/orders.json?limit=10`, {
@@ -573,8 +618,16 @@ router.get('/api/orders', authenticateRequest, requiresSubscription, async (ctx)
 });
 
 // Main app route
-router.get('(/)', async (ctx) => {
+router.get('(/)', authenticateRequest, requiresSubscription, async (ctx) => {
   console.log('=== MAIN ROUTE ===');
+  console.log('Session:', {
+    id: ctx.state.session?.id,
+    shop: ctx.state.session?.shop,
+    isOnline: ctx.state.session?.isOnline,
+    hasToken: !!ctx.state.session?.accessToken && ctx.state.session?.accessToken !== 'placeholder'
+  });
+  console.log('Has active subscription:', ctx.state.hasActiveSubscription);
+  
   const shop = ctx.query.shop;
   const host = ctx.query.host;
   
