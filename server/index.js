@@ -290,7 +290,7 @@ async function authenticateRequest(ctx, next) {
   }
   
   const dest = new URL(decodedSessionToken.dest);
-  const shop = dest.hostname;
+  let shop = dest.hostname;
   
   // Fallback: use shop from query parameter if available
   const queryShop = ctx.query.shop;
@@ -434,50 +434,24 @@ router.get("/billing/confirm", async (ctx) => {
 });
 
 // Billing endpoints
-router.get('/api/billing/create', authenticateRequest, async (ctx) => {
+router.get('/api/billing/create', async (ctx) => {
   try {
     console.log('=== BILLING CREATE DEBUG ===');
-    console.log('Session:', {
-      id: ctx.state.session?.id,
-      shop: ctx.state.session?.shop,
-      hasAccessToken: !!ctx.state.session?.accessToken
-    });
+    const shop = ctx.query.shop;
+    if (!shop) {
+      ctx.status = 400;
+      ctx.body = { error: 'Missing shop parameter' };
+      return;
+    }
     
-    const client = new shopify.clients.Graphql({
-      session: ctx.state.session,
-    });
+    console.log('Creating billing for shop:', shop);
     
-    const TEST_MODE = process.env.NODE_ENV !== 'production';
-    console.log('Test mode:', TEST_MODE);
-    console.log('Host:', HOST);
+    // For now, we'll redirect to a simple billing page
+    // In a real app, you'd need to implement proper OAuth flow
+    const billingUrl = `https://${shop}/admin/oauth/authorize?client_id=${SHOPIFY_API_KEY}&scope=${SCOPES}&redirect_uri=${HOST}/api/billing/callback&state=${shop}`;
     
-    const response = await client.query({
-      data: `mutation {
-        appSubscriptionCreate(
-          name: "BGN/EUR Price Display"
-          ${TEST_MODE ? ', test: true' : ''}
-          trialDays: 5
-          returnUrl: "${HOST}/api/billing/callback?shop=${ctx.state.shop}"
-          lineItems: [{
-            plan: {
-              appRecurringPricingDetails: {
-                price: { amount: 14.99, currencyCode: USD }
-                interval: EVERY_30_DAYS
-              }
-            }
-          }]
-        ) {
-          appSubscription {
-            id
-          }
-          confirmationUrl
-          userErrors {
-            field
-            message
-          }
-        }
-      }`
-    });
+    ctx.redirect(billingUrl);
+    return;
     
     const { confirmationUrl, userErrors } = response.body.data.appSubscriptionCreate;
     
@@ -496,16 +470,17 @@ router.get('/api/billing/create', authenticateRequest, async (ctx) => {
   }
 });
 
-router.get('/api/billing/callback', authenticateRequest, async (ctx) => {
-  const { charge_id } = ctx.query;
+router.get('/api/billing/callback', async (ctx) => {
+  const { charge_id, shop } = ctx.query;
   
   if (charge_id) {
     // Subscription was accepted
     console.log('Subscription activated:', charge_id);
-    ctx.redirect('/?billing=success');
+    ACTIVE_SUBSCRIPTION[shop] = true;
+    ctx.redirect(`/?shop=${shop}&billing=success`);
   } else {
     // Subscription was declined
-    ctx.redirect('/?billing=declined');
+    ctx.redirect(`/?shop=${shop}&billing=declined`);
   }
 });
 
@@ -592,7 +567,7 @@ const CURRENCY = "USD";
 let ACTIVE_SUBSCRIPTION = {}; // тестово — в реално приложение запази в база
 
 router.get("/auth/callback", async (ctx) => {
-  const { shop, code } = ctx.query;
+  const { shop, code, state } = ctx.query;
 
   console.log("🚀 Влязохме в /auth/callback за магазин:", shop);
 
@@ -624,7 +599,7 @@ router.get("/auth/callback", async (ctx) => {
             mutation {
               appSubscriptionCreate(
                 name: "${APP_PLAN_NAME}"
-                returnUrl: "${HOST}/billing/confirm?shop=${shop}"
+                returnUrl: "${HOST}/api/billing/callback?shop=${shop}"
                 lineItems: [{
                   plan: {
                     appRecurringPricingDetails: {
@@ -660,13 +635,36 @@ router.get("/auth/callback", async (ctx) => {
 });
 
 // Main app route
-router.get('(/)', authenticateRequest, async (ctx) => {
+router.get('(/)', async (ctx) => {
   console.log('=== MAIN ROUTE ===');
-  const shop = ctx.state.shop; // Използваме shop от state вместо от query
+  const shop = ctx.query.shop; // Използваме shop от query параметър
   const host = ctx.query.host;
+  
+  if (!shop) {
+    ctx.body = "Missing shop parameter. Please install the app through Shopify.";
+    ctx.status = 400;
+    return;
+  }
+  
+  // Check if this is a billing callback
+  const { billing } = ctx.query;
+  if (billing === 'success') {
+    console.log('Billing success callback received');
+    ACTIVE_SUBSCRIPTION[shop] = true;
+  }
   
   if (!ACTIVE_SUBSCRIPTION[shop]) {
     console.log("Нямаш активен абонамент.");
+    
+    // Check if we should initiate billing
+    const { initiate_billing } = ctx.query;
+    if (initiate_billing === 'true') {
+      console.log('Initiating billing for shop:', shop);
+      
+      // Redirect to billing creation
+      ctx.redirect(`/api/billing/create?shop=${shop}`);
+      return;
+    }
   }
   
   ctx.set('Content-Type', 'text/html');
@@ -1080,6 +1078,10 @@ router.get('(/)', authenticateRequest, async (ctx) => {
           <button onclick="startBilling()" class="big-button" style="background: #ffc107; color: #212529;">
             Започни безплатен пробен период
           </button>
+          <br><br>
+          <a href="/api/billing/create?shop=${shop}" class="big-button" style="background: #28a745; color: white; text-decoration: none; display: inline-block; margin-top: 10px;">
+            Директно стартиране на абонамент
+          </a>
         </div>
       \`;
       
@@ -1140,7 +1142,7 @@ router.get('(/)', authenticateRequest, async (ctx) => {
 });
 
 // Debug route
-router.get('/debug', authenticateRequest, async (ctx) => {
+router.get('/debug', async (ctx) => {
   const allSessions = [];
   for (const [id, session] of memorySessionStorage.storage) {
     allSessions.push({
@@ -1161,11 +1163,7 @@ router.get('/debug', authenticateRequest, async (ctx) => {
       host: HOST
     },
     sessions: allSessions,
-    currentShop: ctx.state.shop,
-    currentSession: {
-      id: ctx.state.session?.id,
-      hasAccessToken: !!ctx.state.session?.accessToken
-    }
+    queryShop: ctx.query.shop
   };
 });
 
