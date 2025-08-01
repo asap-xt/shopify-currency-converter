@@ -351,8 +351,27 @@ async function authenticateRequest(ctx, next) {
         apiSecretKey: SHOPIFY_API_SECRET ? 'SET' : 'NOT SET',
         scopes: SCOPES,
         hostName: HOST_NAME,
-        parsedScopes: SCOPES.split(',')
+        parsedScopes: SCOPES.split(','),
+        requiredScopes: ['read_orders', 'write_themes', 'read_locations']
       });
+      
+      // Check if all required scopes are present
+      const requiredScopes = ['read_orders', 'write_themes', 'read_locations'];
+      const currentScopes = SCOPES.split(',');
+      const missingScopes = requiredScopes.filter(scope => !currentScopes.includes(scope));
+      
+      if (missingScopes.length > 0) {
+        console.error('Missing required scopes:', missingScopes);
+        console.error('Current scopes:', currentScopes);
+        console.error('Please add missing scopes in Partner Dashboard');
+      }
+      
+      // Check App URL configuration
+      console.log('App URL configuration check:');
+      console.log('- Current HOST:', HOST);
+      console.log('- Current HOST_NAME:', HOST_NAME);
+      console.log('- Expected App URL in Partner Dashboard:', HOST_NAME || HOST);
+      console.log('- Expected callback URL:', `${HOST_NAME || HOST}/auth/callback`);
       
       const tokenExchangeResult = await shopify.auth.tokenExchange({
         shop: shop,
@@ -381,11 +400,18 @@ async function authenticateRequest(ctx, next) {
           associatedUser: tokenExchangeResult.associatedUser,
           accountOwner: tokenExchangeResult.accountOwner
         });
-        console.error('This might be due to:');
-        console.error('1. App not configured for Managed Install in Partner Dashboard');
-        console.error('2. Incorrect scopes configuration');
-        console.error('3. App URL not properly configured');
-        console.error('4. App not properly installed in the store');
+              console.error('This might be due to:');
+      console.error('1. App not configured for Managed Install in Partner Dashboard');
+      console.error('2. Incorrect scopes configuration');
+      console.error('3. App URL not properly configured');
+      console.error('4. App not properly installed in the store');
+      console.error('');
+      console.error('SOLUTION STEPS:');
+      console.error('1. Go to Partner Dashboard > Your App > App Setup');
+      console.error('2. Set App URL to:', HOST_NAME || HOST);
+      console.error('3. Add callback URL:', `${HOST_NAME || HOST}/auth/callback`);
+      console.error('4. Ensure all required scopes are added:', requiredScopes);
+      console.error('5. Reinstall the app in your store');
         ctx.status = 500;
         ctx.body = 'Token exchange failed - no access token';
         return;
