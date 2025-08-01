@@ -14,6 +14,7 @@ console.log('SHOPIFY_API_KEY:', process.env.SHOPIFY_API_KEY ? 'SET' : 'MISSING')
 console.log('SHOPIFY_API_SECRET:', process.env.SHOPIFY_API_SECRET ? 'SET' : 'MISSING');
 console.log('SCOPES:', process.env.SCOPES);
 console.log('HOST:', process.env.HOST);
+console.log('HOST_NAME:', process.env.HOST_NAME);
 console.log('====================================');
 
 // Session storage
@@ -54,8 +55,15 @@ const {
 } = process.env;
 
 // Validation
-if (!SHOPIFY_API_KEY || !SHOPIFY_API_SECRET || !SCOPES || !HOST_NAME) {
+if (!SHOPIFY_API_KEY || !SHOPIFY_API_SECRET || !SCOPES || (!HOST && !HOST_NAME)) {
   console.error('FATAL: Missing required environment variables!');
+  console.error('Missing:', {
+    SHOPIFY_API_KEY: !SHOPIFY_API_KEY,
+    SHOPIFY_API_SECRET: !SHOPIFY_API_SECRET,
+    SCOPES: !SCOPES,
+    HOST: !HOST,
+    HOST_NAME: !HOST_NAME
+  });
   process.exit(1);
 }
 
@@ -64,11 +72,19 @@ const shopify = shopifyApi({
   apiKey: SHOPIFY_API_KEY,
   apiSecretKey: SHOPIFY_API_SECRET,
   scopes: SCOPES.split(','),
-  hostName: HOST_NAME,
+  hostName: HOST_NAME || HOST,
   apiVersion: '2024-10',
   isEmbeddedApp: true,
   sessionStorage: memorySessionStorage,
+  // Enable token exchange for managed install
+  useOnlineTokens: false,
+  // Enable managed pricing support
+  future: {
+    unstable_managedPricingSupport: true,
+  },
 });
+
+console.log('Shopify API initialized');
 
 const app = new Koa();
 app.keys = [SHOPIFY_API_SECRET];
@@ -86,12 +102,17 @@ app.use(async (ctx, next) => {
 
 // Request logging
 app.use(async (ctx, next) => {
+  const start = Date.now();
   console.log(`${new Date().toISOString()} - ${ctx.method} ${ctx.path}`);
   try {
     await next();
+    const duration = Date.now() - start;
+    console.log(`${new Date().toISOString()} - ${ctx.method} ${ctx.path} - ${ctx.status} - ${duration}ms`);
   } catch (err) {
-    console.error(`Error handling ${ctx.method} ${ctx.path}:`, err);
-    throw err;
+    const duration = Date.now() - start;
+    console.error(`Error handling ${ctx.method} ${ctx.path} - ${duration}ms:`, err);
+    ctx.status = 500;
+    ctx.body = 'Internal Server Error';
   }
 });
 
@@ -268,6 +289,7 @@ router.get('/auth/callback', async (ctx) => {
 // Middleware за автентикация чрез Token Exchange
 async function authenticateRequest(ctx, next) {
   console.log('=== AUTHENTICATING REQUEST ===');
+  const start = Date.now();
   
   let encodedSessionToken = null;
   let decodedSessionToken = null;
@@ -323,17 +345,47 @@ async function authenticateRequest(ctx, next) {
     
     try {
       console.log('Starting token exchange for shop:', shop);
+      console.log('Session token length:', encodedSessionToken.length);
+      console.log('Shopify API config:', {
+        apiKey: SHOPIFY_API_KEY ? 'SET' : 'NOT SET',
+        apiSecretKey: SHOPIFY_API_SECRET ? 'SET' : 'NOT SET',
+        scopes: SCOPES,
+        hostName: HOST_NAME,
+        parsedScopes: SCOPES.split(',')
+      });
+      
       const tokenExchangeResult = await shopify.auth.tokenExchange({
         shop: shop,
         sessionToken: encodedSessionToken,
+        // For managed install, we need to specify the app type
+        isOnline: false,
       });
       
       console.log('Token exchange successful');
-      console.log('Access token received:', tokenExchangeResult.accessToken ? 'Yes' : 'No');
-      console.log('Scope:', tokenExchangeResult.scope);
+      console.log('Token exchange result:', {
+        hasAccessToken: !!tokenExchangeResult.accessToken,
+        accessTokenLength: tokenExchangeResult.accessToken?.length,
+        scope: tokenExchangeResult.scope,
+        expires: tokenExchangeResult.expires,
+        associatedUser: tokenExchangeResult.associatedUser,
+        accountOwner: tokenExchangeResult.accountOwner
+      });
       
       if (!tokenExchangeResult.accessToken) {
         console.error('Token exchange succeeded but no access token received');
+        console.error('Token exchange result details:', {
+          hasAccessToken: !!tokenExchangeResult.accessToken,
+          hasScope: !!tokenExchangeResult.scope,
+          scope: tokenExchangeResult.scope,
+          expires: tokenExchangeResult.expires,
+          associatedUser: tokenExchangeResult.associatedUser,
+          accountOwner: tokenExchangeResult.accountOwner
+        });
+        console.error('This might be due to:');
+        console.error('1. App not configured for Managed Install in Partner Dashboard');
+        console.error('2. Incorrect scopes configuration');
+        console.error('3. App URL not properly configured');
+        console.error('4. App not properly installed in the store');
         ctx.status = 500;
         ctx.body = 'Token exchange failed - no access token';
         return;
@@ -381,10 +433,12 @@ async function authenticateRequest(ctx, next) {
   ctx.state.shop = shop;
   ctx.state.session = session;
   
+  const duration = Date.now() - start;
   console.log('Session set in ctx.state:', {
     shop: ctx.state.shop,
     sessionId: ctx.state.session?.id,
-    hasAccessToken: !!ctx.state.session?.accessToken
+    hasAccessToken: !!ctx.state.session?.accessToken,
+    duration: `${duration}ms`
   });
   
   await next();
@@ -1123,11 +1177,45 @@ app.use(router.allowedMethods());
 
 const PORT = process.env.PORT || 3000;
 
-app.listen(PORT, '0.0.0.0', function() {
+const server = app.listen(PORT, '0.0.0.0', function() {
   console.log(`✓ Server listening on port ${PORT}`);
   console.log(`✓ Using Token Exchange authentication (Shopify managed install)`);
   console.log(`✓ App URL: ${HOST}`);
+  console.log('✓ Server ready to handle requests');
 }).on('error', (err) => {
   console.error('FATAL: Server failed to start:', err);
   process.exit(1);
+});
+
+// Add server timeout
+server.timeout = 30000; // 30 seconds
+server.keepAliveTimeout = 30000; // 30 seconds
+
+// Add global error handler
+process.on('uncaughtException', (err) => {
+  console.error('Uncaught Exception:', err);
+  console.error('Stack trace:', err.stack);
+  // Don't exit immediately, let the server handle it
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+  // Don't exit immediately, let the server handle it
+});
+
+// Graceful shutdown
+process.on('SIGTERM', () => {
+  console.log('SIGTERM received, shutting down gracefully');
+  server.close(() => {
+    console.log('Server closed');
+    process.exit(0);
+  });
+});
+
+process.on('SIGINT', () => {
+  console.log('SIGINT received, shutting down gracefully');
+  server.close(() => {
+    console.log('Server closed');
+    process.exit(0);
+  });
 });
