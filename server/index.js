@@ -56,6 +56,12 @@ const {
 // Validation
 if (!SHOPIFY_API_KEY || !SHOPIFY_API_SECRET || !SCOPES || !HOST_NAME) {
   console.error('FATAL: Missing required environment variables!');
+  console.error('Missing:', {
+    SHOPIFY_API_KEY: !SHOPIFY_API_KEY,
+    SHOPIFY_API_SECRET: !SHOPIFY_API_SECRET,
+    SCOPES: !SCOPES,
+    HOST_NAME: !HOST_NAME
+  });
   process.exit(1);
 }
 
@@ -65,9 +71,15 @@ const shopify = shopifyApi({
   apiSecretKey: SHOPIFY_API_SECRET,
   scopes: SCOPES.split(','),
   hostName: HOST_NAME,
-  apiVersion: '2024-10',
+  apiVersion: LATEST_API_VERSION,
   isEmbeddedApp: true,
   sessionStorage: memorySessionStorage,
+  // For public apps, we need to handle both online and offline tokens
+  useOnlineTokens: false,
+  // Enable managed pricing support
+  future: {
+    unstable_managedPricingSupport: true,
+  },
 });
 
 const app = new Koa();
@@ -287,6 +299,15 @@ async function authenticateRequest(ctx, next) {
     console.log('No valid session with access token, performing token exchange...');
     
     try {
+      console.log('=== TOKEN EXCHANGE DEBUG ===');
+      console.log('Shop:', shop);
+      console.log('Session token length:', encodedSessionToken.length);
+      console.log('Session token starts with:', encodedSessionToken.substring(0, 20));
+      console.log('API Key set:', !!SHOPIFY_API_KEY);
+      console.log('API Secret set:', !!SHOPIFY_API_SECRET);
+      console.log('Host name:', HOST_NAME);
+      console.log('Scopes:', SCOPES);
+      
       const tokenExchangeResult = await shopify.auth.tokenExchange({
         shop: shop,
         sessionToken: encodedSessionToken,
@@ -307,12 +328,29 @@ async function authenticateRequest(ctx, next) {
       
       await memorySessionStorage.storeSession(session);
       
-    } catch (error) {
-      console.error('Token exchange failed:', error);
-      ctx.status = 500;
-      ctx.body = 'Token exchange failed';
-      return;
-    }
+          } catch (error) {
+        console.error('Token exchange failed:', error);
+        console.error('Error details:', {
+          message: error.message,
+          statusCode: error.response?.statusCode,
+          body: error.response?.body,
+          headers: error.response?.headers
+        });
+        
+        // Check if it's a configuration issue
+        if (error.message.includes('400 Bad Request')) {
+          console.error('Token exchange 400 error - possible causes:');
+          console.error('1. App not properly configured in Partner Dashboard');
+          console.error('2. Incorrect API key or secret');
+          console.error('3. App URL not matching configuration');
+          console.error('4. Missing required scopes');
+          console.error('5. App not installed in the store');
+        }
+        
+        ctx.status = 500;
+        ctx.body = 'Token exchange failed';
+        return;
+      }
   }
   
   ctx.state.shop = shop;
@@ -324,7 +362,7 @@ async function authenticateRequest(ctx, next) {
 // Billing check middleware
 async function requiresSubscription(ctx, next) {
   try {
-    const client = new shopify.api.clients.Graphql({
+    const client = new shopify.clients.Graphql({
       session: ctx.state.session,
     });
     
@@ -370,23 +408,32 @@ async function requiresSubscription(ctx, next) {
 // Billing endpoints
 router.get('/api/billing/create', authenticateRequest, async (ctx) => {
   try {
-    const client = new shopify.api.clients.Graphql({
+    console.log('=== BILLING CREATE DEBUG ===');
+    console.log('Session:', {
+      id: ctx.state.session?.id,
+      shop: ctx.state.session?.shop,
+      hasAccessToken: !!ctx.state.session?.accessToken
+    });
+    
+    const client = new shopify.clients.Graphql({
       session: ctx.state.session,
     });
     
     const TEST_MODE = process.env.NODE_ENV !== 'production';
+    console.log('Test mode:', TEST_MODE);
+    console.log('Host:', HOST);
     
     const response = await client.query({
       data: `mutation {
         appSubscriptionCreate(
-          name: "BGN/EUR Price Display",
-          test: ${TEST_MODE ? true : null},
-          trialDays: 5,
-          returnUrl: "${HOST}/api/billing/callback?shop=${ctx.state.shop}",
+          name: "BGN/EUR Price Display"
+          ${TEST_MODE ? ', test: true' : ''}
+          trialDays: 5
+          returnUrl: "${HOST}/api/billing/callback?shop=${ctx.state.shop}"
           lineItems: [{
             plan: {
               appRecurringPricingDetails: {
-                price: { amount: 14.99, currencyCode: USD },
+                price: { amount: 14.99, currencyCode: USD }
                 interval: EVERY_30_DAYS
               }
             }
