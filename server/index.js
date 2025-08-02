@@ -676,6 +676,7 @@ router.get('(/)', async (ctx) => {
   <title>BGN/EUR Price Display</title>
   <meta name="shopify-api-key" content="${SHOPIFY_API_KEY}" />
   <script src="https://cdn.shopify.com/shopifycloud/app-bridge.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@shopify/app-bridge-utils@3.5.1/dist/index.iife.js"></script>
   <style>
     body {
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
@@ -1025,8 +1026,7 @@ router.get('(/)', async (ctx) => {
   
   <script type="module">
     import createApp from 'https://cdn.shopify.com/shopifycloud/app-bridge.js';
-    // Вземаме getSessionToken от CDN-build-а
-    import { getSessionToken } from 'https://cdn.jsdelivr.net/npm/@shopify/app-bridge-utils@3.5.1/dist/index.iife.js';
+    // getSessionToken идва вече от window['app-bridge-utils']
     // Redirect action ще зареждаме от глобалния AppBridge инстанс
     const AppBridge = window['app-bridge'];
     const Redirect = AppBridge.actions.Redirect;
@@ -1034,10 +1034,10 @@ router.get('(/)', async (ctx) => {
     const apiKey = document.querySelector('meta[name="shopify-api-key"]').content;
     const shopOrigin = new URLSearchParams(window.location.search).get('shop');
     window.app = createApp({ apiKey, shopOrigin });
-    // Правим getSessionToken и authenticatedFetch достъпни глобално
-    window.getSessionToken = getSessionToken;
+    // Взимаме helper-а от глобалния обект
+    const ABUtils = window['app-bridge-utils'];
     window.authenticatedFetch = async (path, options = {}) => {
-      const token = await getSessionToken(window.app);
+      const token = await ABUtils.getSessionToken(window.app);
       options.headers = {
         ...options.headers,
         'Authorization': 'Bearer ' + token,
