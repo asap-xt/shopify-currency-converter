@@ -649,7 +649,6 @@ router.get('(/)', async (ctx) => {
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>BGN/EUR Price Display</title>
   <meta name="shopify-api-key" content="${SHOPIFY_API_KEY}" />
-  <!-- 1) core App Bridge -->
   <script src="https://cdn.shopify.com/shopifycloud/app-bridge.js"></script>
   <style>
     body {
@@ -998,19 +997,24 @@ router.get('(/)', async (ctx) => {
     </div>
   </div>
   
-  <!-- 2) ESM import на utils и Redirect -->
-  <script type="module">
-    import createApp from 'https://cdn.shopify.com/shopifycloud/app-bridge.js';
-    import { authenticatedFetch, getSessionToken } from 'https://unpkg.com/@shopify/app-bridge-utils@3.5.1/dist/esm/index.js';
-    import { Redirect } from 'https://cdn.shopify.com/shopifycloud/app-bridge/actions';
+  <script>
+    // 1. Вземаме AppBridge от глобалния scope
+    const AppBridge = window['app-bridge'];
+    const createApp = AppBridge.default;
 
-    // Инициализиране на App Bridge
+    // 2. Извличаме utilities и actions
+    const { authenticatedFetch } = AppBridge.utilities;
+    const { Redirect } = AppBridge.actions;
+
+    // 3. Инициализираме приложението
     const apiKey     = document.querySelector('meta[name="shopify-api-key"]').content;
     const shopOrigin = new URLSearchParams(window.location.search).get('shop');
-    window.app       = createApp({ apiKey, shopOrigin });
-    window.authFetch = authenticatedFetch(window.app);  // 🌟 готов helper
-    window.getSessionToken = getSessionToken;
-    window.Redirect = Redirect.create(window.app);
+    const app        = createApp({ apiKey, shopOrigin });
+
+    // 4. Създаваме helper-и за следене на сесия и billing
+    window.authFetch = authenticatedFetch(app);           // всички API вика чрез authFetch(...)
+    window.Redirect  = Redirect;                          // класът Redirect
+    window.redirect  = Redirect.create(app);              // инстанция за dispatch()
   </script>
   
   <script>
@@ -1090,12 +1094,12 @@ router.get('(/)', async (ctx) => {
     
     async function startBilling() {
       try {
-        const res = await authFetch('/api/billing/create?shop=${shop}');
+        const res  = await authFetch('/api/billing/create?shop=${shop}');
         const { confirmationUrl } = await res.json();
-        
-        Redirect.dispatch(Redirect.Action.APP, confirmationUrl);
-      } catch (error) {
-        console.error('Billing error:', error);
+        // вместо window.top.location...
+        window.redirect.dispatch(Redirect.Action.APP, confirmationUrl);
+      } catch (e) {
+        console.error('Billing error:', e);
         alert('Грешка при стартиране на пробен период. Моля опитайте отново.');
       }
     }
