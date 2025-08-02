@@ -6,7 +6,7 @@ import koaSession from 'koa-session';
 import Router from 'koa-router';
 import crypto from 'crypto';
 import getRawBody from 'raw-body';
-import { shopifyApi, LATEST_API_VERSION, Session, GraphqlClient, RequestedTokenType } from '@shopify/shopify-api';
+import { shopifyApi, LATEST_API_VERSION, Session, RequestedTokenType } from '@shopify/shopify-api';
 
 // Environment check
 console.log('=== Environment Variables Check ===');
@@ -74,12 +74,6 @@ const shopify = shopifyApi({
   apiVersion: LATEST_API_VERSION,
   isEmbeddedApp: true,
   sessionStorage: memorySessionStorage,
-  // For public apps, we need to handle both online and offline tokens
-  useOnlineTokens: false,
-  // Enable managed pricing support
-  future: {
-    unstable_managedPricingSupport: true,
-  },
 });
 
 const app = new Koa();
@@ -235,16 +229,27 @@ function redirectToSessionTokenBouncePage(ctx) {
 // Session token bounce page
 router.get('/session-token-bounce', async (ctx) => {
   ctx.set('Content-Type', 'text/html');
-  ctx.body = `
-    <!DOCTYPE html>
-    <html>
-      <head>
-        <meta name="shopify-api-key" content="${SHOPIFY_API_KEY}" />
-        <script src="https://cdn.shopify.com/shopifycloud/app-bridge.js"></script>
-      </head>
-      <body>Loading...</body>
-    </html>
-  `;
+  ctx.body = `<!DOCTYPE html>
+<html>
+<head>
+  <meta name="shopify-api-key" content="${SHOPIFY_API_KEY}" />
+  <script type="module">
+    import createApp from 'https://cdn.shopify.com/shopifycloud/app-bridge.js';
+    import { getSessionToken } from 'https://cdn.jsdelivr.net/npm/@shopify/app-bridge-utils';
+    const apiKey = document.querySelector('meta[name="shopify-api-key"]').content;
+    const shop = new URLSearchParams(window.location.search).get('shop');
+    const app = createApp({ apiKey, shopOrigin: shop });
+    getSessionToken(app)
+      .then((token) => {
+        const params = new URLSearchParams(window.location.search);
+        params.set('id_token', token);
+        window.location.replace(\`\${window.location.pathname}?\${params.toString()}\`);
+      })
+      .catch(console.error);
+  </script>
+</head>
+<body>Loading...</body>
+</html>`;
 });
 
 // Middleware за автентикация чрез Token Exchange
@@ -300,6 +305,7 @@ async function authenticateRequest(ctx, next) {
     shop = queryShop;
   }
 
+  ctx.state.shop = shop;
   const sessions = await memorySessionStorage.findSessionsByShop(shop);
   let session = sessions.find(s => !s.isOnline);
 
@@ -317,32 +323,23 @@ async function authenticateRequest(ctx, next) {
       console.log('Scopes:', SCOPES);
 
       const tokenExchangeResult = await shopify.auth.tokenExchange({
-        shop,
+        shop: shop,
         sessionToken: encodedSessionToken,
-        requestedTokenType: 'urn:shopify:params:oauth:token-type:offline-access-token',
+        requestedTokenType: RequestedTokenType.OfflineAccessToken,
       });
-
-      console.log('Token exchange successful');
       console.log('Token exchange result:', {
         hasAccessToken: !!tokenExchangeResult.accessToken,
         accessTokenLength: tokenExchangeResult.accessToken?.length,
-        scope: tokenExchangeResult.scope,
-        expires: tokenExchangeResult.expires,
-        associatedUser: tokenExchangeResult.associatedUser,
-        accountOwner: tokenExchangeResult.accountOwner
       });
-
       if (!tokenExchangeResult.accessToken) {
-        console.error('Token exchange succeeded but no access token received');
-        ctx.status = 500;
-        ctx.body = 'Token exchange failed - no access token';
-        return;
+        throw new Error('Missing access token after exchange');
       }
 
-      const sessionId = `offline_${shop}`;
+      console.log('Token exchange successful');
+
       session = new Session({
-        id: sessionId,
-        shop: shop,
+        id: `${ctx.state.shop}_offline`,
+        shop: ctx.state.shop,
         state: 'active',
         isOnline: false,
         accessToken: tokenExchangeResult.accessToken,
@@ -439,8 +436,8 @@ router.get('/api/billing/create', authenticateRequest, async (ctx) => {
   const TEST_MODE = process.env.NODE_ENV !== 'production';
   try {
     const client = new shopify.api.clients.Graphql({ session: ctx.state.session });
-    const response = await client.query({
-      data: `mutation {
+    const mutation = `
+      mutation {
         appSubscriptionCreate(
           name: "BGN/EUR Price Display",
           test: ${TEST_MODE},
@@ -458,19 +455,17 @@ router.get('/api/billing/create', authenticateRequest, async (ctx) => {
           confirmationUrl
           userErrors { field message }
         }
-      }`
-    });
-
+      }
+    `;
+    const response = await client.query({ data: mutation });
     const { confirmationUrl, userErrors } = response.body.data.appSubscriptionCreate;
-
-    if (userErrors?.length > 0) {
+    if (userErrors.length) {
       console.error('Billing errors:', userErrors);
       ctx.status = 400;
       ctx.body = { error: userErrors[0].message };
-      return;
+    } else {
+      ctx.body = { confirmationUrl };
     }
-
-    ctx.body = { confirmationUrl };
   } catch (error) {
     console.error('Create subscription error:', error);
     ctx.status = 500;
@@ -478,17 +473,13 @@ router.get('/api/billing/create', authenticateRequest, async (ctx) => {
   }
 });
 
-router.get('/api/billing/callback', async (ctx) => {
-  const { charge_id, shop } = ctx.query;
-
+router.get('/api/billing/callback', authenticateRequest, async (ctx) => {
+  const { charge_id } = ctx.query;
   if (charge_id) {
-    // Subscription was accepted
     console.log('Subscription activated:', charge_id);
-    ACTIVE_SUBSCRIPTION[shop] = true;
-    ctx.redirect(`/?shop=${shop}&billing=success`);
+    ctx.redirect(`/?billing=success&shop=${ctx.state.shop}`);
   } else {
-    // Subscription was declined
-    ctx.redirect(`/?shop=${shop}&billing=declined`);
+    ctx.redirect(`/?billing=declined&shop=${ctx.state.shop}`);
   }
 });
 
@@ -1034,15 +1025,16 @@ router.get('(/)', async (ctx) => {
   
   <script type="module">
     import createApp from 'https://cdn.shopify.com/shopifycloud/app-bridge.js';
-    import { getSessionToken } from 'https://cdn.jsdelivr.net/npm/@shopify/app-bridge-utils';
     import { Redirect } from 'https://cdn.shopify.com/shopifycloud/app-bridge/actions';
-
+    
     const apiKey = document.querySelector('meta[name="shopify-api-key"]').content;
-    // shop идва от ?shop= в query string
     const shopOrigin = new URLSearchParams(window.location.search).get('shop');
-
-    // Създаваме глобално App Bridge инстанция
-    window.app = createApp({ apiKey, shopOrigin });
+    
+    // Create global App Bridge instance
+    window.app = createApp({
+      apiKey,
+      shopOrigin
+    });
     window.Redirect = Redirect;
   </script>
   
@@ -1123,10 +1115,10 @@ router.get('(/)', async (ctx) => {
     
     async function startBilling() {
       try {
-        const res = await fetch(\`/api/billing/create?shop=\${shop}\`);
+        const res = await fetch('/api/billing/create?shop=${shop}');
         const { confirmationUrl } = await res.json();
-
-        // Вместо window.top.location, използваме App Bridge Redirect
+        
+        // Use App Bridge Redirect instead of window.top.location
         const redirect = Redirect.create(window.app);
         redirect.dispatch(Redirect.Action.APP, confirmationUrl);
       } catch (error) {
