@@ -6,7 +6,7 @@ import koaSession from 'koa-session';
 import Router from 'koa-router';
 import crypto from 'crypto';
 import getRawBody from 'raw-body';
-import { shopifyApi, LATEST_API_VERSION, Session, GraphqlClient } from '@shopify/shopify-api';
+import { shopifyApi, LATEST_API_VERSION, Session, GraphqlClient, RequestedTokenType } from '@shopify/shopify-api';
 
 // Environment check
 console.log('=== Environment Variables Check ===');
@@ -317,8 +317,9 @@ async function authenticateRequest(ctx, next) {
       console.log('Scopes:', SCOPES);
 
       const tokenExchangeResult = await shopify.auth.tokenExchange({
-        shop: shop,
+        shop,
         sessionToken: encodedSessionToken,
+        requestedTokenType: RequestedTokenType.OfflineAccessToken,
       });
 
       console.log('Token exchange successful');
