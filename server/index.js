@@ -1044,7 +1044,7 @@ router.get('(/)', async (ctx) => {
       const token = await getSessionToken(window.app);
       options.headers = {
         ...options.headers,
-        'Authorization': `Bearer \${token}`,
+        'Authorization': 'Bearer ' + token,
         'Content-Type': 'application/json',
       };
       return fetch(path, options);
