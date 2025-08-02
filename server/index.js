@@ -1025,21 +1025,17 @@ router.get('(/)', async (ctx) => {
   
   <script type="module">
     import createApp from 'https://cdn.shopify.com/shopifycloud/app-bridge.js';
-    import { getSessionToken } from 'https://cdn.jsdelivr.net/npm/@shopify/app-bridge-utils';
-    import { Redirect } from 'https://cdn.shopify.com/shopifycloud/app-bridge/actions';
-    
+    // Вземаме getSessionToken от CDN-build-а
+    import { getSessionToken } from 'https://cdn.jsdelivr.net/npm/@shopify/app-bridge-utils@3.5.1/dist/index.iife.js';
+    // Redirect action ще зареждаме от глобалния AppBridge инстанс
+    const AppBridge = window['app-bridge'];
+    const Redirect = AppBridge.actions.Redirect;
+
     const apiKey = document.querySelector('meta[name="shopify-api-key"]').content;
     const shopOrigin = new URLSearchParams(window.location.search).get('shop');
-    
-    // Create global App Bridge instance
-    window.app = createApp({
-      apiKey,
-      shopOrigin
-    });
-    window.Redirect = Redirect;
+    window.app = createApp({ apiKey, shopOrigin });
+    // Правим getSessionToken и authenticatedFetch достъпни глобално
     window.getSessionToken = getSessionToken;
-    
-    // Helper for all API calls
     window.authenticatedFetch = async (path, options = {}) => {
       const token = await getSessionToken(window.app);
       options.headers = {
@@ -1049,6 +1045,7 @@ router.get('(/)', async (ctx) => {
       };
       return fetch(path, options);
     };
+    window.Redirect = Redirect;
   </script>
   
   <script>
