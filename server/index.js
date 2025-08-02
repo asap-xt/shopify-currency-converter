@@ -434,24 +434,31 @@ router.get("/billing/confirm", async (ctx) => {
 });
 
 // Billing endpoints
-router.get('/api/billing/create', async (ctx) => {
+router.get('/api/billing/create', authenticateRequest, async (ctx) => {
+  const TEST_MODE = process.env.NODE_ENV !== 'production';
   try {
-    console.log('=== BILLING CREATE DEBUG ===');
-    const shop = ctx.query.shop;
-    if (!shop) {
-      ctx.status = 400;
-      ctx.body = { error: 'Missing shop parameter' };
-      return;
-    }
-
-    console.log('Creating billing for shop:', shop);
-
-    // For now, we'll redirect to a simple billing page
-    // In a real app, you'd need to implement proper OAuth flow
-    const billingUrl = `https://${shop}/admin/oauth/authorize?client_id=${SHOPIFY_API_KEY}&scope=${SCOPES}&redirect_uri=${HOST}/api/billing/callback&state=${shop}`;
-
-    ctx.redirect(billingUrl);
-    return;
+    const client = new shopify.api.clients.Graphql({ session: ctx.state.session });
+    const response = await client.query({
+      data: `mutation {
+        appSubscriptionCreate(
+          name: "BGN/EUR Price Display",
+          test: ${TEST_MODE},
+          trialDays: 5,
+          returnUrl: "${HOST}/?billing=success&shop=${ctx.state.shop}",
+          lineItems: [{
+            plan: {
+              appRecurringPricingDetails: {
+                price: { amount: 14.99, currencyCode: USD },
+                interval: EVERY_30_DAYS
+              }
+            }
+          }]
+        ) {
+          confirmationUrl
+          userErrors { field message }
+        }
+      }`
+    });
 
     const { confirmationUrl, userErrors } = response.body.data.appSubscriptionCreate;
 
@@ -1024,6 +1031,20 @@ router.get('(/)', async (ctx) => {
     </div>
   </div>
   
+  <script type="module">
+    import createApp from 'https://cdn.shopify.com/shopifycloud/app-bridge.js';
+    import { getSessionToken } from 'https://cdn.jsdelivr.net/npm/@shopify/app-bridge-utils';
+    import { Redirect } from 'https://cdn.shopify.com/shopifycloud/app-bridge/actions';
+
+    const apiKey = document.querySelector('meta[name="shopify-api-key"]').content;
+    // shop идва от ?shop= в query string
+    const shopOrigin = new URLSearchParams(window.location.search).get('shop');
+
+    // Създаваме глобално App Bridge инстанция
+    window.app = createApp({ apiKey, shopOrigin });
+    window.Redirect = Redirect;
+  </script>
+  
   <script>
     let billingStatus = null;
     
@@ -1101,15 +1122,12 @@ router.get('(/)', async (ctx) => {
     
     async function startBilling() {
       try {
-        const response = await fetch('/api/billing/create?shop=${shop}');
-        const data = await response.json();
-        
-        if (data.confirmationUrl) {
-          // Redirect to Shopify billing page
-          window.top.location.href = data.confirmationUrl;
-        } else {
-          alert('Грешка при стартиране на пробен период. Моля опитайте отново.');
-        }
+        const res = await fetch(\`/api/billing/create?shop=\${shop}\`);
+        const { confirmationUrl } = await res.json();
+
+        // Вместо window.top.location, използваме App Bridge Redirect
+        const redirect = Redirect.create(window.app);
+        redirect.dispatch(Redirect.Action.APP, confirmationUrl);
       } catch (error) {
         console.error('Billing error:', error);
         alert('Грешка при стартиране на пробен период. Моля опитайте отново.');
