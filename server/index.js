@@ -1025,6 +1025,7 @@ router.get('(/)', async (ctx) => {
   
   <script type="module">
     import createApp from 'https://cdn.shopify.com/shopifycloud/app-bridge.js';
+    import { getSessionToken } from 'https://cdn.jsdelivr.net/npm/@shopify/app-bridge-utils';
     import { Redirect } from 'https://cdn.shopify.com/shopifycloud/app-bridge/actions';
     
     const apiKey = document.querySelector('meta[name="shopify-api-key"]').content;
@@ -1036,6 +1037,18 @@ router.get('(/)', async (ctx) => {
       shopOrigin
     });
     window.Redirect = Redirect;
+    window.getSessionToken = getSessionToken;
+    
+    // Helper for all API calls
+    window.authenticatedFetch = async (path, options = {}) => {
+      const token = await getSessionToken(window.app);
+      options.headers = {
+        ...options.headers,
+        'Authorization': `Bearer \${token}`,
+        'Content-Type': 'application/json',
+      };
+      return fetch(path, options);
+    };
   </script>
   
   <script>
@@ -1044,7 +1057,7 @@ router.get('(/)', async (ctx) => {
     async function loadAppData() {
       console.log('loadAppData');
       try {
-        const response = await fetch('/api/shop?shop=${shop}');
+        const response = await window.authenticatedFetch('/api/shop?shop=${shop}');
         console.log('response', response);
         if (response.ok) {
           const data = await response.json();
@@ -1070,7 +1083,7 @@ router.get('(/)', async (ctx) => {
     async function checkBillingStatus() {
       console.log('checkBillingStatus');
       try {
-        const response = await fetch('/api/billing/status?shop=${shop}');
+        const response = await window.authenticatedFetch('/api/billing/status?shop=${shop}');
         console.log('response', response);
         if (response.ok) {
           const data = await response.json();
@@ -1115,7 +1128,7 @@ router.get('(/)', async (ctx) => {
     
     async function startBilling() {
       try {
-        const res = await fetch('/api/billing/create?shop=${shop}');
+        const res = await window.authenticatedFetch('/api/billing/create?shop=${shop}');
         const { confirmationUrl } = await res.json();
         
         // Use App Bridge Redirect instead of window.top.location
