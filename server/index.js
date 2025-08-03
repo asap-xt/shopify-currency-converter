@@ -690,6 +690,11 @@ router.get('(/)', async (ctx) => {
       return true;
     }
     
+    // Вземаме shop от URL параметрите
+    function getShopFromUrl() {
+      return new URLSearchParams(window.location.search).get('shop');
+    }
+    
     // ЗАДЪЛЖИТЕЛНО loadAppData стартира едва след като authFetch е дефинирана
     async function loadAppData() {
       if (!checkAuthFetch()) {
@@ -698,8 +703,14 @@ router.get('(/)', async (ctx) => {
         return;
       }
       
+      const shop = getShopFromUrl();
+      if (!shop) {
+        console.error('Shop параметър не е наличен в URL');
+        return;
+      }
+      
       try {
-        const response = await authFetch('/api/shop?shop=${shop}');
+        const response = await authFetch(\`/api/shop?shop=\${shop}\`);
         // …
       } catch (e) {
         console.error('Error loading app data:', e);
@@ -1068,7 +1079,8 @@ router.get('(/)', async (ctx) => {
     async function loadAppData() {
       console.log('loadAppData');
       try {
-        const response = await authFetch('/api/shop?shop=${shop}');
+        const shop = getShopFromUrl();
+        const response = await authFetch(\`/api/shop?shop=\${shop}\`);
         console.log('response', response);
         if (response.ok) {
           const data = await response.json();
@@ -1099,7 +1111,8 @@ router.get('(/)', async (ctx) => {
       }
       
       try {
-        const response = await authFetch('/api/billing/status?shop=${shop}');
+        const shop = getShopFromUrl();
+        const response = await authFetch(\`/api/billing/status?shop=\${shop}\`);
         console.log('response', response);
         if (response.ok) {
           const data = await response.json();
@@ -1115,6 +1128,7 @@ router.get('(/)', async (ctx) => {
     }
     
     function showBillingPrompt() {
+      const shop = getShopFromUrl();
       const billingPrompt = \`
         <div style="background: #fff3cd; border: 2px solid #ffc107; border-radius: 8px; padding: 24px; margin-bottom: 24px; text-align: center;">
           <h3 style="margin: 0 0 16px 0; color: #856404;">🎁 Започнете 5-дневен безплатен пробен период</h3>
@@ -1126,7 +1140,7 @@ router.get('(/)', async (ctx) => {
             Започни безплатен пробен период
           </button>
           <br><br>
-          <a href="/api/billing/create?shop=${shop}" class="big-button" style="background: #28a745; color: white; text-decoration: none; display: inline-block; margin-top: 10px;">
+          <a href="/api/billing/create?shop=\${shop}" class="big-button" style="background: #28a745; color: white; text-decoration: none; display: inline-block; margin-top: 10px;">
             Директно стартиране на абонамент
           </a>
         </div>
@@ -1150,7 +1164,8 @@ router.get('(/)', async (ctx) => {
       }
       
       try {
-        const res  = await authFetch('/api/billing/create?shop=${shop}');
+        const shop = getShopFromUrl();
+        const res  = await authFetch(\`/api/billing/create?shop=\${shop}\`);
         const { confirmationUrl } = await res.json();
         // вместо window.top.location...
         window.REDIRECT.dispatch(Redirect.Action.APP, confirmationUrl);
