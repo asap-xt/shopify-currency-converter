@@ -1,22 +1,32 @@
 // public/app.js
+console.log('🔥 app.js се зарежда...');
+
 import createApp from 'https://cdn.shopify.com/shopifycloud/app-bridge.js';
 import { authenticatedFetch } from 'https://esm.sh/@shopify/app-bridge-utils@3.5.1';
 import { Redirect } from 'https://cdn.shopify.com/shopifycloud/app-bridge/actions';
 
 // Инициализация на App Bridge
+console.log('🔥 Инициализирам App Bridge...');
 const apiKey = document.querySelector('meta[name="shopify-api-key"]').content;
 const shopOrigin = new URLSearchParams(window.location.search).get('shop');
+console.log('🔥 apiKey:', apiKey ? 'SET' : 'MISSING');
+console.log('🔥 shopOrigin:', shopOrigin);
 const app = createApp({ apiKey, shopOrigin });
 
 // Готов helper за API calls & redirect
+console.log('🔥 Създавам helpers...');
 const shopifyFetch = authenticatedFetch(app);
 const shopifyRedirect = Redirect.create(app);
+console.log('🔥 shopifyFetch:', typeof shopifyFetch);
+console.log('🔥 shopifyRedirect:', typeof shopifyRedirect);
 
 // Експортирайте ги глобално
+console.log('🔥 Експортирам глобални функции...');
 window.shopifyFetch = shopifyFetch;
 window.shopifyRedirect = shopifyRedirect;
 window.showTab = showTab;
 window.startBilling = startBilling;
+console.log('🔥 Глобални функции експортирани');
 
 // UI функции
 async function loadAppData() {
@@ -129,8 +139,10 @@ function checkBillingUrlParams() {
 }
 
 // Изчакайте DOM, преди да стартирате
+console.log('🔥 Регистрирам DOMContentLoaded event listener...');
 document.addEventListener('DOMContentLoaded', () => {
   console.log('🔥 DOMContentLoaded — стартирам loadAppData');
   checkBillingUrlParams();
   loadAppData();
 });
+console.log('🔥 app.js завършен');
