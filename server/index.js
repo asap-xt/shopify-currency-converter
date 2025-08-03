@@ -652,31 +652,31 @@ router.get('(/)', async (ctx) => {
   
   <!-- 1. Core App Bridge -->
   <script src="https://cdn.shopify.com/shopifycloud/app-bridge.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@shopify/app-bridge-utils@3.5.10/dist/index.iife.js"></script>
 
-  <!-- 2. Определяме authFetch и Redirect** -->
-  <script>
-   (function() {
-     // 1) Глобални App Bridge модули
-     const AppBridge      = window['app-bridge'];
-     const AppBridgeUtils = window['app-bridge-utils'];
-     const createApp      = AppBridge.default;
-     const authFetch      = AppBridgeUtils.authenticatedFetch;
-     const getSessionToken= AppBridgeUtils.getSessionToken;
-     const RedirectAction = AppBridge.actions.Redirect;
- 
-     // 2) Инициализация
-     const apiKey     = document.querySelector('meta[name="shopify-api-key"]').content;
-     const shopOrigin = new URLSearchParams(window.location.search).get('shop');
-     const app        = createApp({ apiKey, shopOrigin });
+  <!-- 2. ESM App Bridge Utils -->
+  <script type="module">
+    // 1. Core App Bridge
+    import createApp from 'https://cdn.shopify.com/shopifycloud/app-bridge.js';
 
-     // 3) Достъпни глобални helper-и
-     window.authFetch       = authFetch(app);
-     window.getSessionToken = getSessionToken;
-     window.Redirect        = RedirectAction;
-     window.REDIRECT        = RedirectAction.create(app);
-   })();
- </script>
+    // 2. ESM imports от esm.sh (работят без проблеми в Shopify Admin)
+    import {
+      authenticatedFetch,
+      getSessionToken
+    } from 'https://esm.sh/@shopify/app-bridge-utils@3.5.1';
+    import { Redirect } from 'https://cdn.shopify.com/shopifycloud/app-bridge/actions';
+
+    // 3. Инициализация
+    const apiKey     = document.querySelector('meta[name="shopify-api-key"]').content;
+    const shopOrigin = new URLSearchParams(window.location.search).get('shop');
+    const app        = createApp({ apiKey, shopOrigin });
+
+    // 4. Глобални helper-и
+    window.authFetch      = authenticatedFetch(app);      // за всички api викове
+    window.getSessionToken= getSessionToken;              // ако ви трябва директно
+    window.REDIRECT       = Redirect.create(app);         // за billing redirect
+
+    console.log('✅ App Bridge initialized, authFetch available:', typeof window.authFetch);
+  </script>
 
   <!-- 3. Вашите други скриптове идват след това -->
   <script>
