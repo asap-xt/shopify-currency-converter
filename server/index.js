@@ -649,7 +649,70 @@ router.get('(/)', async (ctx) => {
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>BGN/EUR Price Display</title>
   <meta name="shopify-api-key" content="${SHOPIFY_API_KEY}" />
+  
+  <!-- 1. Core App Bridge -->
   <script src="https://cdn.shopify.com/shopifycloud/app-bridge.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@shopify/app-bridge-utils@3.5.10/dist/index.iife.js"></script>
+
+  <!-- 2. Определяме authFetch и Redirect** -->
+  <script>
+   (function() {
+     // 1) Глобални App Bridge модули
+     const AppBridge      = window['app-bridge'];
+     const AppBridgeUtils = window['app-bridge-utils'];
+     const createApp      = AppBridge.default;
+     const authFetch      = AppBridgeUtils.authenticatedFetch;
+     const getSessionToken= AppBridgeUtils.getSessionToken;
+     const RedirectAction = AppBridge.actions.Redirect;
+ 
+     // 2) Инициализация
+     const apiKey     = document.querySelector('meta[name="shopify-api-key"]').content;
+     const shopOrigin = new URLSearchParams(window.location.search).get('shop');
+     const app        = createApp({ apiKey, shopOrigin });
+
+     // 3) Достъпни глобални helper-и
+     window.authFetch       = authFetch(app);
+     window.getSessionToken = getSessionToken;
+     window.Redirect        = RedirectAction;
+     window.REDIRECT        = RedirectAction.create(app);
+   })();
+ </script>
+
+  <!-- 3. Вашите други скриптове идват след това -->
+  <script>
+    // Проверка дали authFetch е дефинирана
+    function checkAuthFetch() {
+      console.log('typeof authFetch:', typeof authFetch);
+      if (typeof authFetch !== 'function') {
+        console.error('authFetch не е дефинирана!');
+        return false;
+      }
+      return true;
+    }
+    
+    // ЗАДЪЛЖИТЕЛНО loadAppData стартира едва след като authFetch е дефинирана
+    async function loadAppData() {
+      if (!checkAuthFetch()) {
+        console.error('authFetch не е налична, опитвам отново след 1 секунда...');
+        setTimeout(loadAppData, 1000);
+        return;
+      }
+      
+      try {
+        const response = await authFetch('/api/shop?shop=${shop}');
+        // …
+      } catch (e) {
+        console.error('Error loading app data:', e);
+      }
+    }
+    
+    // НЕ викайте loadAppData() в момента на parse-ване на скрипта,
+    // а например след:
+    document.addEventListener('DOMContentLoaded', () => {
+      // Малко закъснение за да сме сигурни, че App Bridge е зареден
+      setTimeout(loadAppData, 100);
+    });
+  </script>
   <style>
     body {
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
@@ -997,25 +1060,7 @@ router.get('(/)', async (ctx) => {
     </div>
   </div>
   
-  <script>
-    // 1. Вземаме AppBridge от глобалния scope
-    const AppBridge = window['app-bridge'];
-    const createApp = AppBridge.default;
 
-    // 2. Извличаме utilities и actions
-    const { authenticatedFetch } = AppBridge.utilities;
-    const { Redirect } = AppBridge.actions;
-
-    // 3. Инициализираме приложението
-    const apiKey     = document.querySelector('meta[name="shopify-api-key"]').content;
-    const shopOrigin = new URLSearchParams(window.location.search).get('shop');
-    const app        = createApp({ apiKey, shopOrigin });
-
-    // 4. Създаваме helper-и за следене на сесия и billing
-    window.authFetch = authenticatedFetch(app);           // всички API вика чрез authFetch(...)
-    window.Redirect  = Redirect;                          // класът Redirect
-    window.redirect  = Redirect.create(app);              // инстанция за dispatch()
-  </script>
   
   <script>
     let billingStatus = null;
@@ -1048,6 +1093,11 @@ router.get('(/)', async (ctx) => {
     
     async function checkBillingStatus() {
       console.log('checkBillingStatus');
+      if (!checkAuthFetch()) {
+        console.error('authFetch не е налична за checkBillingStatus');
+        return;
+      }
+      
       try {
         const response = await authFetch('/api/billing/status?shop=${shop}');
         console.log('response', response);
@@ -1093,11 +1143,17 @@ router.get('(/)', async (ctx) => {
     }
     
     async function startBilling() {
+      if (!checkAuthFetch()) {
+        console.error('authFetch не е налична за startBilling');
+        alert('Грешка при стартиране на пробен период. Моля опитайте отново.');
+        return;
+      }
+      
       try {
         const res  = await authFetch('/api/billing/create?shop=${shop}');
         const { confirmationUrl } = await res.json();
         // вместо window.top.location...
-        window.redirect.dispatch(Redirect.Action.APP, confirmationUrl);
+        window.REDIRECT.dispatch(Redirect.Action.APP, confirmationUrl);
       } catch (e) {
         console.error('Billing error:', e);
         alert('Грешка при стартиране на пробен период. Моля опитайте отново.');
@@ -1125,8 +1181,6 @@ router.get('(/)', async (ctx) => {
     } else if (urlParams.get('billing') === 'declined') {
       alert('❌ Плащането беше отказано. Моля опитайте отново.');
     }
-    
-    setTimeout(loadAppData, 1000);
   </script>
 </body>
 </html>
