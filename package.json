@@ -24,6 +24,7 @@
     "koa": "^2.13.4",
     "koa-router": "^10.1.1",
     "koa-session": "^5.12.3",
+    "koa-static": "^5.0.0",
     "raw-body": "^3.0.0",
     "react": "^18.3.1",
     "react-reconciler": "^0.29.0"

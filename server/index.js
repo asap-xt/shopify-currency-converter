@@ -3,8 +3,8 @@ import 'dotenv/config';
 import '@shopify/shopify-api/adapters/node';
 import Koa from 'koa';
 import koaSession from 'koa-session';
-import Router from 'koa-router';
 import serve from 'koa-static';
+import Router from 'koa-router';
 import crypto from 'crypto';
 import getRawBody from 'raw-body';
 import { shopifyApi, LATEST_API_VERSION, Session, RequestedTokenType } from '@shopify/shopify-api';
@@ -209,19 +209,6 @@ router.post('/webhooks/shop/redact', async (ctx) => {
   }
 });
 
-router.post('/webhooks/app_subscriptions/update', async (ctx) => {
-  const payload = ctx.request.body; // увери се, че имаш rawBody middleware + HMAC проверка
-  const sub = payload.appSubscription;
-  console.log('📬 Subscription webhook:', sub);
-  if (sub.status === 'ACTIVE') {
-    // активирай фичърите
-  } else if (sub.status === 'CANCELLED') {
-    // деактивирай ги
-  }
-  ctx.status = 200;
-  ctx.body = 'OK';
-});
-
 // Health check
 router.get('/health', async (ctx) => {
   ctx.body = 'OK';
@@ -323,33 +310,70 @@ async function authenticateRequest(ctx, next) {
   }
 
   ctx.state.shop = shop;
-  // Намери offline session
-  let sessions = await memorySessionStorage.findSessionsByShop(ctx.state.shop);
+  const sessions = await memorySessionStorage.findSessionsByShop(shop);
   let session = sessions.find(s => !s.isOnline);
 
-  if (!session || !session.accessToken) {
-    console.log('No valid session → tokenExchange...');
+  if (!session || !session.accessToken || session.accessToken === 'placeholder') {
+    console.log('No valid session with access token, performing token exchange...');
+
     try {
-      const result = await shopify.auth.tokenExchange({
-        shop: ctx.state.shop,
+      console.log('=== TOKEN EXCHANGE DEBUG ===');
+      console.log('Shop:', shop);
+      console.log('Session token length:', encodedSessionToken.length);
+      console.log('Session token starts with:', encodedSessionToken.substring(0, 20));
+      console.log('API Key set:', !!SHOPIFY_API_KEY);
+      console.log('API Secret set:', !!SHOPIFY_API_SECRET);
+      console.log('Host name:', HOST_NAME);
+      console.log('Scopes:', SCOPES);
+
+      const tokenExchangeResult = await shopify.auth.tokenExchange({
+        shop: shop,
         sessionToken: encodedSessionToken,
-        requestedTokenType: RequestedTokenType.OfflineAccessToken, // 🌟 URN
+        requestedTokenType: RequestedTokenType.OfflineAccessToken,
       });
-      if (!result.accessToken) throw new Error('Missing accessToken');
+      console.log('Token exchange result:', {
+        hasAccessToken: !!tokenExchangeResult.accessToken,
+        accessTokenLength: tokenExchangeResult.accessToken?.length,
+      });
+      if (!tokenExchangeResult.accessToken) {
+        throw new Error('Missing access token after exchange');
+      }
+
+      console.log('Token exchange successful');
+
       session = new Session({
-        id:           `${ctx.state.shop}_offline`,
-        shop:         ctx.state.shop,
-        state:        'active',
-        isOnline:     false,
-        accessToken:  result.accessToken,
-        scope:        result.scope,
+        id: `${ctx.state.shop}_offline`,
+        shop: ctx.state.shop,
+        state: 'active',
+        isOnline: false,
+        accessToken: tokenExchangeResult.accessToken,
+        scope: tokenExchangeResult.scope,
       });
+
       await memorySessionStorage.storeSession(session);
-      console.log('Token Exchange OK, saved accessToken');
-    } catch (e) {
-      console.error('Token Exchange FAILED:', e);
+
+    } catch (error) {
+      console.error('Token exchange failed:', error);
+      console.error('Error details:', {
+        message: error.message,
+        statusCode: error.response?.statusCode,
+        body: error.response?.body,
+        headers: error.response?.headers
+      });
+
+      // Check if it's a configuration issue
+      if (error.message.includes('400 Bad Request')) {
+        console.error('Token exchange 400 error - possible causes:');
+        console.error('1. App not properly configured in Partner Dashboard');
+        console.error('2. Incorrect API key or secret');
+        console.error('3. App URL not matching configuration');
+        console.error('4. Missing required scopes');
+        console.error('5. App not installed in the store');
+      }
+
       ctx.status = 500;
-      return ctx.body = 'Token exchange failed';
+      ctx.body = 'Token exchange failed';
+      return;
     }
   }
 
@@ -420,7 +444,7 @@ router.get('/api/billing/create', authenticateRequest, async (ctx) => {
       mutation {
         appSubscriptionCreate(
           name: "BGN/EUR Price Display",
-          test: ${TEST_MODE},                                   # булева променлива
+          test: ${TEST_MODE},
           trialDays: 5,
           returnUrl: "${HOST}/?billing=success&shop=${ctx.state.shop}",
           lineItems: [{
@@ -435,17 +459,19 @@ router.get('/api/billing/create', authenticateRequest, async (ctx) => {
           confirmationUrl
           userErrors { field message }
         }
-      }`;
-    const resp = await client.query({ data: mutation });
-    const { confirmationUrl, userErrors } = resp.body.data.appSubscriptionCreate;
+      }
+    `;
+    const response = await client.query({ data: mutation });
+    const { confirmationUrl, userErrors } = response.body.data.appSubscriptionCreate;
     if (userErrors.length) {
-      console.error('Billing userErrors:', userErrors);
+      console.error('Billing errors:', userErrors);
       ctx.status = 400;
-      return ctx.body = { error: userErrors[0].message };
+      ctx.body = { error: userErrors[0].message };
+    } else {
+      ctx.body = { confirmationUrl };
     }
-    ctx.body = { confirmationUrl };
-  } catch (e) {
-    console.error('Create subscription error:', e);
+  } catch (error) {
+    console.error('Create subscription error:', error);
     ctx.status = 500;
     ctx.body = { error: 'Failed to create subscription' };
   }
@@ -1001,10 +1027,6 @@ router.get('(/)', async (ctx) => {
       <p style="margin-top: 8px;">Нужда от помощ? Свържете се с нас на emarketingbg@gmail.com</p>
     </div>
   </div>
-  
-
-  
-  
 </body>
 </html>
   `;
