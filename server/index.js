@@ -4,6 +4,7 @@ import '@shopify/shopify-api/adapters/node';
 import Koa from 'koa';
 import koaSession from 'koa-session';
 import Router from 'koa-router';
+import serve from 'koa-static';
 import crypto from 'crypto';
 import getRawBody from 'raw-body';
 import { shopifyApi, LATEST_API_VERSION, Session, RequestedTokenType } from '@shopify/shopify-api';
@@ -78,6 +79,9 @@ const shopify = shopifyApi({
 
 const app = new Koa();
 app.keys = [SHOPIFY_API_SECRET];
+
+// Serve static files from public directory
+app.use(serve('public'));
 
 // Raw body middleware за webhooks - ВАЖНО: Трябва да е ПРЕДИ другите middleware
 app.use(async (ctx, next) => {
@@ -649,81 +653,8 @@ router.get('(/)', async (ctx) => {
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>BGN/EUR Price Display</title>
   <meta name="shopify-api-key" content="${SHOPIFY_API_KEY}" />
-  
-  <!-- 1. Core App Bridge -->
   <script src="https://cdn.shopify.com/shopifycloud/app-bridge.js"></script>
-
-  <!-- 2. ESM App Bridge Utils -->
-  <script type="module">
-    // 1. Core App Bridge
-    import createApp from 'https://cdn.shopify.com/shopifycloud/app-bridge.js';
-
-    // 2. ESM imports от esm.sh (работят без проблеми в Shopify Admin)
-    import {
-      authenticatedFetch,
-      getSessionToken
-    } from 'https://esm.sh/@shopify/app-bridge-utils@3.5.1';
-    import { Redirect } from 'https://cdn.shopify.com/shopifycloud/app-bridge/actions';
-
-    // 3. Инициализация
-    const apiKey     = document.querySelector('meta[name="shopify-api-key"]').content;
-    const shopOrigin = new URLSearchParams(window.location.search).get('shop');
-    const app        = createApp({ apiKey, shopOrigin });
-
-    // 4. Глобални helper-и
-    window.authFetch      = authenticatedFetch(app);      // за всички api викове
-    window.getSessionToken= getSessionToken;              // ако ви трябва директно
-    window.REDIRECT       = Redirect.create(app);         // за billing redirect
-
-    console.log('✅ App Bridge initialized, authFetch available:', typeof window.authFetch);
-  </script>
-
-  <!-- 3. Вашите други скриптове идват след това -->
-  <script>
-    // Проверка дали authFetch е дефинирана
-    function checkAuthFetch() {
-      console.log('typeof authFetch:', typeof authFetch);
-      if (typeof authFetch !== 'function') {
-        console.error('authFetch не е дефинирана!');
-        return false;
-      }
-      return true;
-    }
-    
-    // Вземаме shop от URL параметрите
-    function getShopFromUrl() {
-      return new URLSearchParams(window.location.search).get('shop');
-    }
-    
-    // ЗАДЪЛЖИТЕЛНО loadAppData стартира едва след като authFetch е дефинирана
-    async function loadAppData() {
-      if (!checkAuthFetch()) {
-        console.error('authFetch не е налична, опитвам отново след 1 секунда...');
-        setTimeout(loadAppData, 1000);
-        return;
-      }
-      
-      const shop = getShopFromUrl();
-      if (!shop) {
-        console.error('Shop параметър не е наличен в URL');
-        return;
-      }
-      
-      try {
-        const response = await authFetch(\`/api/shop?shop=\${shop}\`);
-        // …
-      } catch (e) {
-        console.error('Error loading app data:', e);
-      }
-    }
-    
-    // НЕ викайте loadAppData() в момента на parse-ване на скрипта,
-    // а например след:
-    document.addEventListener('DOMContentLoaded', () => {
-      // Малко закъснение за да сме сигурни, че App Bridge е зареден
-      setTimeout(loadAppData, 100);
-    });
-  </script>
+  <script type="module" src="/app.js"></script>
   <style>
     body {
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
@@ -1073,130 +1004,7 @@ router.get('(/)', async (ctx) => {
   
 
   
-  <script>
-    let billingStatus = null;
-    
-    async function loadAppData() {
-      console.log('loadAppData');
-      try {
-        const shop = getShopFromUrl();
-        const response = await authFetch(\`/api/shop?shop=\${shop}\`);
-        console.log('response', response);
-        if (response.ok) {
-          const data = await response.json();
-          console.log('Shop data loaded:', data);
-          document.getElementById('loading').style.display = 'none';
-          document.getElementById('status-badge').style.display = 'inline-block';
-          
-          // Check billing status
-          checkBillingStatus();
-        } else if (response.status === 302 || response.redirected) {
-          // Redirected due to no subscription
-          showBillingPrompt();
-        } else {
-          console.error('Failed to load shop data');
-          document.getElementById('loading').innerHTML = 'Грешка при зареждане';
-        }
-      } catch (error) {
-        console.error('Error loading app data:', error);
-        document.getElementById('loading').innerHTML = 'Грешка при зареждане';
-      }
-    }
-    
-    async function checkBillingStatus() {
-      console.log('checkBillingStatus');
-      if (!checkAuthFetch()) {
-        console.error('authFetch не е налична за checkBillingStatus');
-        return;
-      }
-      
-      try {
-        const shop = getShopFromUrl();
-        const response = await authFetch(\`/api/billing/status?shop=\${shop}\`);
-        console.log('response', response);
-        if (response.ok) {
-          const data = await response.json();
-          billingStatus = data.hasActiveSubscription;
-          console.log('Billing status:', billingStatus);
-          if (!billingStatus) {
-            showBillingPrompt();
-          }
-        }
-      } catch (error) {
-        console.error('Error checking billing:', error);
-      }
-    }
-    
-    function showBillingPrompt() {
-      const shop = getShopFromUrl();
-      const billingPrompt = \`
-        <div style="background: #fff3cd; border: 2px solid #ffc107; border-radius: 8px; padding: 24px; margin-bottom: 24px; text-align: center;">
-          <h3 style="margin: 0 0 16px 0; color: #856404;">🎁 Започнете 5-дневен безплатен пробен период</h3>
-          <p style="margin: 0 0 20px 0; color: #856404;">
-            След пробния период: $14.99/месец<br>
-            Можете да отмените по всяко време
-          </p>
-          <button onclick="startBilling()" class="big-button" style="background: #ffc107; color: #212529;">
-            Започни безплатен пробен период
-          </button>
-          <br><br>
-          <a href="/api/billing/create?shop=\${shop}" class="big-button" style="background: #28a745; color: white; text-decoration: none; display: inline-block; margin-top: 10px;">
-            Директно стартиране на абонамент
-          </a>
-        </div>
-      \`;
-      
-      // Insert billing prompt before main content
-      const container = document.querySelector('.container');
-      const header = document.querySelector('.header');
-      header.insertAdjacentHTML('afterend', billingPrompt);
-      
-      // Hide main functionality
-      document.querySelector('.quick-action').style.opacity = '0.5';
-      document.querySelector('.quick-action').style.pointerEvents = 'none';
-    }
-    
-    async function startBilling() {
-      if (!checkAuthFetch()) {
-        console.error('authFetch не е налична за startBilling');
-        alert('Грешка при стартиране на пробен период. Моля опитайте отново.');
-        return;
-      }
-      
-      try {
-        const shop = getShopFromUrl();
-        const res  = await authFetch(\`/api/billing/create?shop=\${shop}\`);
-        const { confirmationUrl } = await res.json();
-        // вместо window.top.location...
-        window.REDIRECT.dispatch(Redirect.Action.APP, confirmationUrl);
-      } catch (e) {
-        console.error('Billing error:', e);
-        alert('Грешка при стартиране на пробен период. Моля опитайте отново.');
-      }
-    }
-    
-    function showTab(tabName) {
-      // Hide all tabs
-      document.querySelectorAll('.tab-content').forEach(content => {
-        content.classList.remove('active');
-      });
-      document.querySelectorAll('.tab').forEach(tab => {
-        tab.classList.remove('active');
-      });
-      
-      // Show selected tab
-      document.getElementById(tabName).classList.add('active');
-      event.target.classList.add('active');
-    }
-    
-    // Check URL parameters for billing status
-    const urlParams = new URLSearchParams(window.location.search);
-    if (urlParams.get('billing') === 'success') {
-      alert('🎉 Успешно активирахте плана! Вече можете да използвате всички функции.');
-    } else if (urlParams.get('billing') === 'declined') {
-      alert('❌ Плащането беше отказано. Моля опитайте отново.');
-    }
-  </script>
+  
 </body>
 </html>
   `;
