@@ -1,6 +1,6 @@
 // public/app.js
 import createApp from 'https://cdn.shopify.com/shopifycloud/app-bridge.js';
-import { authenticatedFetch } from 'https://cdn.jsdelivr.net/npm/@shopify/app-bridge-utils@3.5.1';
+import { authenticatedFetch } from 'https://esm.sh/@shopify/app-bridge-utils@3.5.1';
 import { Redirect } from 'https://cdn.shopify.com/shopifycloud/app-bridge/actions';
 
 // Инициализация на App Bridge
@@ -20,7 +20,7 @@ window.startBilling = startBilling;
 
 // UI функции
 async function loadAppData() {
-  console.log('loadAppData');
+  console.log('🔥 loadAppData стартира');
   try {
     const res = await shopifyFetch(`/api/shop?shop=${shopOrigin}`);
     console.log('response', res);
@@ -130,6 +130,7 @@ function checkBillingUrlParams() {
 
 // Изчакайте DOM, преди да стартирате
 document.addEventListener('DOMContentLoaded', () => {
+  console.log('🔥 DOMContentLoaded — стартирам loadAppData');
   checkBillingUrlParams();
-  setTimeout(loadAppData, 1000);
+  loadAppData();
 });
