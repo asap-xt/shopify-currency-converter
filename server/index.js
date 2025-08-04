@@ -496,42 +496,47 @@ router.get('/api/billing/create', authenticateRequest, async (ctx) => {
       session: ctx.state.session,
     });
 
-    const graphqlQuery = `mutation {
-      appSubscriptionCreate(
-        name: "Pro Plan"
-        returnUrl: "${HOST}/api/billing/callback?shop=${shop}"
-        lineItems: [{
-          plan: {
-            appRecurringPricingDetails: {
-              price: { amount: 14.99, currencyCode: USD }
-              interval: EVERY_30_DAYS
-            }
-          }
-        }]
-      ) {
-        confirmationUrl
-        appSubscription { id }
-        userErrors { message }
-      }
-    }`;
-
-    console.log('Executing GraphQL query...');
-    console.log('GraphQL query:', graphqlQuery);
+    // For Managed Pricing Apps, we need to use the billing API
+    // This will automatically handle the billing flow
     
-    const response = await client.query({
-      data: graphqlQuery
-    });
+    console.log('This is a Managed Pricing App - using billing API...');
+    
+    try {
+      // Create a billing request using the Shopify API
+      const billingResponse = await fetch(`https://${shop}/admin/api/2024-10/recurring_application_charges.json`, {
+        method: 'POST',
+        headers: {
+          'X-Shopify-Access-Token': ctx.state.session.accessToken,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          recurring_application_charge: {
+            name: 'Pro Plan',
+            price: 14.99,
+            currency: 'USD',
+            trial_days: 5,
+            return_url: `${HOST}/api/billing/callback?shop=${shop}`
+          }
+        })
+      });
 
-    const { confirmationUrl, userErrors } = response.body.data.appSubscriptionCreate;
+      const billingData = await billingResponse.json();
+      console.log('Billing response:', billingData);
 
-    if (userErrors?.length > 0) {
-      console.error('Billing errors:', userErrors);
-      ctx.status = 400;
-      ctx.body = { error: userErrors[0].message };
-      return;
+      if (billingData.recurring_application_charge) {
+        const confirmationUrl = billingData.recurring_application_charge.confirmation_url;
+        ctx.body = { 
+          confirmationUrl: confirmationUrl,
+          message: 'Managed Pricing App - billing request created'
+        };
+      } else {
+        throw new Error('Failed to create billing request');
+      }
+    } catch (error) {
+      console.error('Billing API error:', error);
+      ctx.status = 500;
+      ctx.body = { error: 'Failed to create billing request: ' + error.message };
     }
-
-    ctx.body = { confirmationUrl };
   } catch (error) {
     console.error('Create subscription error:', error);
     ctx.status = 500;
@@ -542,13 +547,36 @@ router.get('/api/billing/create', authenticateRequest, async (ctx) => {
 router.get('/api/billing/callback', async (ctx) => {
   const { charge_id, shop } = ctx.query;
 
+  console.log('=== BILLING CALLBACK ===');
+  console.log('Charge ID:', charge_id);
+  console.log('Shop:', shop);
+
   if (charge_id) {
-    // Subscription was accepted
-    console.log('Subscription activated:', charge_id);
-    ACTIVE_SUBSCRIPTION[shop] = true;
-    ctx.redirect(`/?shop=${shop}&billing=success`);
+    // For Managed Pricing Apps, we need to activate the charge
+    try {
+      const response = await fetch(`https://${shop}/admin/api/2024-10/recurring_application_charges/${charge_id}/activate.json`, {
+        method: 'POST',
+        headers: {
+          'X-Shopify-Access-Token': 'placeholder', // Will be replaced by token exchange
+          'Content-Type': 'application/json'
+        }
+      });
+
+      if (response.ok) {
+        console.log('Charge activated successfully');
+        ACTIVE_SUBSCRIPTION[shop] = true;
+        ctx.redirect(`/?shop=${shop}&billing=success`);
+      } else {
+        console.error('Failed to activate charge');
+        ctx.redirect(`/?shop=${shop}&billing=error`);
+      }
+    } catch (error) {
+      console.error('Error activating charge:', error);
+      ctx.redirect(`/?shop=${shop}&billing=error`);
+    }
   } else {
     // Subscription was declined
+    console.log('Billing was declined');
     ctx.redirect(`/?shop=${shop}&billing=declined`);
   }
 });
@@ -563,13 +591,40 @@ router.get('/api/billing/status', async (ctx) => {
     return;
   }
 
-  // Check if shop has active subscription
-  const hasActiveSubscription = ACTIVE_SUBSCRIPTION[shop] || false;
+  // For Managed Pricing Apps, check if there's an active charge
+  try {
+    const response = await fetch(`https://${shop}/admin/api/2024-10/recurring_application_charges.json`, {
+      headers: {
+        'X-Shopify-Access-Token': 'placeholder', // Will be replaced by token exchange
+        'Content-Type': 'application/json'
+      }
+    });
 
-  ctx.body = {
-    hasActiveSubscription: hasActiveSubscription,
-    shop: shop
-  };
+    if (response.ok) {
+      const charges = await response.json();
+      const activeCharge = charges.recurring_application_charges?.find(charge => charge.status === 'active');
+      const hasActiveSubscription = !!activeCharge;
+      
+      ctx.body = {
+        hasActiveSubscription: hasActiveSubscription,
+        shop: shop,
+        chargeStatus: activeCharge?.status
+      };
+    } else {
+      ctx.body = {
+        hasActiveSubscription: ACTIVE_SUBSCRIPTION[shop] || false,
+        shop: shop,
+        error: 'Could not check charge status'
+      };
+    }
+  } catch (error) {
+    console.error('Error checking subscription status:', error);
+    ctx.body = {
+      hasActiveSubscription: ACTIVE_SUBSCRIPTION[shop] || false,
+      shop: shop,
+      error: error.message
+    };
+  }
 });
 
 // API endpoints
