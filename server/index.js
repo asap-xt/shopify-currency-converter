@@ -547,19 +547,60 @@ router.get('/api/billing/status', async (ctx) => {
     return;
   }
 
-  // For Managed Pricing Apps, we can't check charges via API
-  // Instead, we'll use the local storage and check if app is installed
+  // For Managed Pricing Apps, check real billing status
   console.log('Checking subscription status for Managed Pricing App...');
   
-  // For now, we'll use local storage
-  // In a real app, you'd check the app installation status
-  const hasActiveSubscription = ACTIVE_SUBSCRIPTION[shop] || false;
-  
-  ctx.body = {
-    hasActiveSubscription: hasActiveSubscription,
-    shop: shop,
-    message: 'Managed Pricing App - using local storage'
-  };
+  try {
+    // Check if there's an active subscription using GraphQL
+    const billingCheckResponse = await fetch(
+      `https://${shop}/admin/api/2024-10/graphql.json`,
+      {
+        method: "POST",
+        headers: {
+          "X-Shopify-Access-Token": ctx.state.session.accessToken,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          query: `{
+            currentAppInstallation {
+              activeSubscriptions {
+                id
+                status
+                trialDays
+                createdAt
+              }
+            }
+          }`
+        }),
+      }
+    );
+
+    const billingData = await billingCheckResponse.json();
+    console.log("Billing check response:", billingData);
+
+    const subscriptions = billingData.data?.currentAppInstallation?.activeSubscriptions || [];
+    const hasActiveSubscription = subscriptions.some(sub => sub.status === 'ACTIVE');
+
+    console.log("Found subscriptions:", subscriptions);
+    console.log("Has active subscription:", hasActiveSubscription);
+
+    ctx.body = {
+      hasActiveSubscription: hasActiveSubscription,
+      shop: shop,
+      subscriptions: subscriptions,
+      message: 'Managed Pricing App - real billing check'
+    };
+  } catch (error) {
+    console.error("Error checking billing status:", error);
+    // Fallback to local storage
+    const hasActiveSubscription = ACTIVE_SUBSCRIPTION[shop] || false;
+    ctx.body = {
+      hasActiveSubscription: hasActiveSubscription,
+      shop: shop,
+      error: error.message,
+      message: 'Managed Pricing App - fallback to local storage'
+    };
+  }
 });
 
 // API endpoints
@@ -722,7 +763,7 @@ router.get('(/)', async (ctx) => {
   }
 
   // Check if this is a billing callback
-  const { billing } = ctx.query;
+  const { billing, initiate_billing } = ctx.query;
   if (billing === 'success') {
     console.log('Billing success callback received');
     ACTIVE_SUBSCRIPTION[shop] = true;
@@ -731,18 +772,22 @@ router.get('(/)', async (ctx) => {
     ACTIVE_SUBSCRIPTION[shop] = true;
   }
 
+  // Check if we should initiate billing
+  if (initiate_billing === 'true' || billing === 'required') {
+    console.log('Initiating billing for shop:', shop);
+
+    // Redirect to billing creation
+    ctx.redirect(`/api/billing/create?shop=${shop}`);
+    return;
+  }
+
+  // For Managed Pricing Apps, we need to check real billing status
+  // instead of relying on local storage
   if (!ACTIVE_SUBSCRIPTION[shop]) {
-    console.log("Нямаш активен абонамент.");
-
-    // Check if we should initiate billing
-    const { initiate_billing, billing } = ctx.query;
-    if (initiate_billing === 'true' || billing === 'required') {
-      console.log('Initiating billing for shop:', shop);
-
-      // Redirect to billing creation
-      ctx.redirect(`/api/billing/create?shop=${shop}`);
-      return;
-    }
+    console.log("Нямаш активен абонамент в local storage - проверявам реалния статус...");
+    
+    // We'll let the app check billing status via API
+    // instead of blocking access here
   }
 
   ctx.set('Content-Type', 'text/html');
@@ -1145,7 +1190,9 @@ router.get('(/)', async (ctx) => {
      }
     
          async function checkBillingStatus() {
-       console.log('checkBillingStatus called');
+       console.log('=== CHECK BILLING STATUS CALLED ===');
+       console.log('Shop:', '${shop}');
+       console.log('Current time:', new Date().toISOString());
        try {
          const url = '/api/billing/status?shop=${shop}';
          console.log('Fetching billing status:', url);
@@ -1156,9 +1203,18 @@ router.get('(/)', async (ctx) => {
          if (response.ok) {
            const data = await response.json();
            billingStatus = data.hasActiveSubscription;
-           console.log('Billing status:', billingStatus);
+           console.log('=== BILLING STATUS CHECK ===');
+           console.log('Full billing response:', data);
+           console.log('Has active subscription:', billingStatus);
+           console.log('Shop:', data.shop);
+           console.log('Message:', data.message);
+           console.log('Subscriptions:', data.subscriptions);
+           console.log('========================');
            if (!billingStatus) {
+             console.log('Billing status is false - showing billing prompt');
              showBillingPrompt();
+           } else {
+             console.log('Billing status is true - subscription is active');
            }
          } else {
            console.error('Failed to check billing status, status:', response.status);
@@ -1171,6 +1227,8 @@ router.get('(/)', async (ctx) => {
      }
     
     function showBillingPrompt() {
+      console.log('=== SHOWING BILLING PROMPT ===');
+      console.log('Billing status is false - showing prompt');
       const billingPrompt = \`
         <div style="background: #fff3cd; border: 2px solid #ffc107; border-radius: 8px; padding: 24px; margin-bottom: 24px; text-align: center;">
           <h3 style="margin: 0 0 16px 0; color: #856404;">🎁 Започнете 5-дневен безплатен пробен период</h3>
