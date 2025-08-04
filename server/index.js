@@ -96,6 +96,20 @@ app.use(async (ctx, next) => {
   await next();
 });
 
+// CORS middleware
+app.use(async (ctx, next) => {
+  ctx.set('Access-Control-Allow-Origin', '*');
+  ctx.set('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  ctx.set('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
+  
+  if (ctx.method === 'OPTIONS') {
+    ctx.status = 200;
+    return;
+  }
+  
+  await next();
+});
+
 // Request logging
 app.use(async (ctx, next) => {
   console.log(`${new Date().toISOString()} - ${ctx.method} ${ctx.path}`);
@@ -434,7 +448,7 @@ router.get("/billing/confirm", async (ctx) => {
 });
 
 // Billing endpoints
-router.get('/api/billing/create', async (ctx) => {
+router.get('/api/billing/create', authenticateRequest, async (ctx) => {
   try {
     console.log('=== BILLING CREATE DEBUG ===');
     const shop = ctx.query.shop;
@@ -446,12 +460,31 @@ router.get('/api/billing/create', async (ctx) => {
 
     console.log('Creating billing for shop:', shop);
 
-    // For now, we'll redirect to a simple billing page
-    // In a real app, you'd need to implement proper OAuth flow
-    const billingUrl = `https://${shop}/admin/oauth/authorize?client_id=${SHOPIFY_API_KEY}&scope=${SCOPES}&redirect_uri=${HOST}/api/billing/callback&state=${shop}`;
+    // Create a proper billing subscription using GraphQL
+    const client = new shopify.clients.Graphql({
+      session: ctx.state.session,
+    });
 
-    ctx.redirect(billingUrl);
-    return;
+    const response = await client.query({
+      data: `mutation {
+        appSubscriptionCreate(
+          name: "Pro Plan"
+          returnUrl: "${HOST}/api/billing/callback?shop=${shop}"
+          lineItems: [{
+            plan: {
+              appRecurringPricingDetails: {
+                price: { amount: 14.99, currencyCode: "USD" }
+                interval: EVERY_30_DAYS
+              }
+            }
+          }]
+        ) {
+          confirmationUrl
+          appSubscription { id }
+          userErrors { message }
+        }
+      }`
+    });
 
     const { confirmationUrl, userErrors } = response.body.data.appSubscriptionCreate;
 
