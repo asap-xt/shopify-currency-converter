@@ -16,6 +16,14 @@ console.log('SCOPES:', process.env.SCOPES);
 console.log('HOST:', process.env.HOST);
 console.log('====================================');
 
+// Debug environment variables
+console.log('=== DEBUG ENV VARS ===');
+console.log('SHOPIFY_API_KEY length:', process.env.SHOPIFY_API_KEY?.length);
+console.log('SHOPIFY_API_SECRET length:', process.env.SHOPIFY_API_SECRET?.length);
+console.log('SCOPES length:', process.env.SCOPES?.length);
+console.log('HOST length:', process.env.HOST?.length);
+console.log('========================');
+
 // Session storage
 const memorySessionStorage = {
   storage: new Map(),
@@ -53,6 +61,13 @@ const {
 } = process.env;
 
 // Validation
+console.log('=== VALIDATION CHECK ===');
+console.log('SHOPIFY_API_KEY exists:', !!SHOPIFY_API_KEY);
+console.log('SHOPIFY_API_SECRET exists:', !!SHOPIFY_API_SECRET);
+console.log('SCOPES exists:', !!SCOPES);
+console.log('HOST exists:', !!HOST);
+console.log('========================');
+
 if (!SHOPIFY_API_KEY || !SHOPIFY_API_SECRET || !SCOPES || !HOST) {
   console.error('FATAL: Missing required environment variables!');
   console.error('Missing:', {
