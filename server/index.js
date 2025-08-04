@@ -502,52 +502,20 @@ router.get('/api/billing/create', authenticateRequest, async (ctx) => {
     console.log('This is a Managed Pricing App - using billing API...');
     
     try {
-      // For Managed Pricing Apps, we need to use GraphQL API
-      // The REST API doesn't work for Managed Pricing Apps
+      // For Managed Pricing Apps, we cannot use Billing API
+      // Instead, we need to redirect to the app installation
+      // where Shopify will handle billing automatically
       
-      console.log('Using GraphQL API for Managed Pricing App...');
+      console.log('This is a Managed Pricing App - redirecting to app installation...');
+      console.log('Shopify will handle billing automatically during app installation');
       
-      const graphqlQuery = `mutation {
-        appSubscriptionCreate(
-          name: "Pro Plan"
-          returnUrl: "${HOST}/api/billing/callback?shop=${shop}"
-          lineItems: [{
-            plan: {
-              appRecurringPricingDetails: {
-                price: { amount: 14.99, currencyCode: USD }
-                interval: EVERY_30_DAYS
-              }
-            }
-          }]
-        ) {
-          confirmationUrl
-          appSubscription { id }
-          userErrors { message }
-        }
-      }`;
-
-      console.log('GraphQL query:', graphqlQuery);
+      // Redirect to the app installation page
+      // Shopify will automatically handle billing during installation
+      const appInstallUrl = `https://${shop}/admin/oauth/authorize?client_id=${SHOPIFY_API_KEY}&scope=${SCOPES}&redirect_uri=${HOST}/api/billing/callback&state=${shop}`;
       
-      const response = await client.query({
-        data: graphqlQuery
-      });
-
-      console.log('GraphQL response:', response.body);
-      
-      const { confirmationUrl, userErrors } = response.body.data.appSubscriptionCreate;
-
-      if (userErrors?.length > 0) {
-        console.error('GraphQL errors:', userErrors);
-        throw new Error(userErrors[0].message);
-      }
-
-      if (!confirmationUrl) {
-        throw new Error('No confirmation URL received');
-      }
-
       ctx.body = { 
-        confirmationUrl: confirmationUrl,
-        message: 'Managed Pricing App - GraphQL billing request created'
+        confirmationUrl: appInstallUrl,
+        message: 'Managed Pricing App - redirecting to app installation'
       };
 
       // GraphQL response is already handled above
@@ -564,19 +532,29 @@ router.get('/api/billing/create', authenticateRequest, async (ctx) => {
 });
 
 router.get('/api/billing/callback', async (ctx) => {
-  const { charge_id, shop } = ctx.query;
+  const { charge_id, shop, code } = ctx.query;
 
   console.log('=== BILLING CALLBACK ===');
   console.log('Charge ID:', charge_id);
   console.log('Shop:', shop);
+  console.log('Code:', code);
 
-  if (charge_id) {
-    // For Managed Pricing Apps, we need to activate the charge
+  if (code) {
+    // This is an OAuth callback from app installation
+    console.log('OAuth callback received - app installation completed');
+    
+    // For Managed Pricing Apps, billing is handled automatically during installation
+    // We just need to mark the app as active
+    ACTIVE_SUBSCRIPTION[shop] = true;
+    ctx.redirect(`/?shop=${shop}&billing=success`);
+  } else if (charge_id) {
+    // This is a billing callback (for non-Managed Pricing Apps)
+    console.log('Billing callback received');
     try {
       const response = await fetch(`https://${shop}/admin/api/2024-10/recurring_application_charges/${charge_id}/activate.json`, {
         method: 'POST',
         headers: {
-          'X-Shopify-Access-Token': 'placeholder', // Will be replaced by token exchange
+          'X-Shopify-Access-Token': 'placeholder',
           'Content-Type': 'application/json'
         }
       });
@@ -594,8 +572,8 @@ router.get('/api/billing/callback', async (ctx) => {
       ctx.redirect(`/?shop=${shop}&billing=error`);
     }
   } else {
-    // Subscription was declined
-    console.log('Billing was declined');
+    // No code or charge_id - installation was declined
+    console.log('App installation was declined');
     ctx.redirect(`/?shop=${shop}&billing=declined`);
   }
 });
@@ -610,40 +588,19 @@ router.get('/api/billing/status', async (ctx) => {
     return;
   }
 
-  // For Managed Pricing Apps, check if there's an active charge
-  try {
-    const response = await fetch(`https://${shop}/admin/api/2024-10/recurring_application_charges.json`, {
-      headers: {
-        'X-Shopify-Access-Token': 'placeholder', // Will be replaced by token exchange
-        'Content-Type': 'application/json'
-      }
-    });
-
-    if (response.ok) {
-      const charges = await response.json();
-      const activeCharge = charges.recurring_application_charges?.find(charge => charge.status === 'active');
-      const hasActiveSubscription = !!activeCharge;
-      
-      ctx.body = {
-        hasActiveSubscription: hasActiveSubscription,
-        shop: shop,
-        chargeStatus: activeCharge?.status
-      };
-    } else {
-      ctx.body = {
-        hasActiveSubscription: ACTIVE_SUBSCRIPTION[shop] || false,
-        shop: shop,
-        error: 'Could not check charge status'
-      };
-    }
-  } catch (error) {
-    console.error('Error checking subscription status:', error);
-    ctx.body = {
-      hasActiveSubscription: ACTIVE_SUBSCRIPTION[shop] || false,
-      shop: shop,
-      error: error.message
-    };
-  }
+  // For Managed Pricing Apps, we can't check charges via API
+  // Instead, we'll use the local storage and check if app is installed
+  console.log('Checking subscription status for Managed Pricing App...');
+  
+  // For now, we'll use local storage
+  // In a real app, you'd check the app installation status
+  const hasActiveSubscription = ACTIVE_SUBSCRIPTION[shop] || false;
+  
+  ctx.body = {
+    hasActiveSubscription: hasActiveSubscription,
+    shop: shop,
+    message: 'Managed Pricing App - using local storage'
+  };
 });
 
 // API endpoints
