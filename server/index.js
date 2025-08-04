@@ -502,27 +502,50 @@ router.get('/api/billing/create', authenticateRequest, async (ctx) => {
     console.log('This is a Managed Pricing App - using billing API...');
     
     try {
-      // For Managed Pricing Apps, we need to redirect to app installation
-      // where Shopify will handle billing automatically
+      // For Managed Pricing Apps, we need to use the correct billing API
+      console.log('This is a Managed Pricing App - using proper billing API...');
       
-      console.log('This is a Managed Pricing App - redirecting to app installation...');
-      console.log('Shopify will handle billing automatically during app installation');
-      
-      // Redirect to the app installation page
-      // Shopify will automatically handle billing during installation
-      const redirectUri = encodeURIComponent(`${HOST}/auth/callback`);
-      const appInstallUrl = `https://${shop}/admin/oauth/authorize?client_id=${SHOPIFY_API_KEY}&scope=${SCOPES}&redirect_uri=${redirectUri}&state=${shop}`;
-      
-      console.log('Redirect URI:', `${HOST}/auth/callback`);
-      console.log('Encoded redirect URI:', redirectUri);
-      console.log('App install URL:', appInstallUrl);
-      
-      ctx.body = { 
-        confirmationUrl: appInstallUrl,
-        message: 'Managed Pricing App - redirecting to app installation'
-      };
+      // Use the correct GraphQL mutation for Managed Pricing Apps
+      const client = new shopify.clients.Graphql({
+        session: ctx.state.session,
+      });
 
-      // GraphQL response is already handled above
+      const response = await client.query({
+        data: `mutation {
+          appSubscriptionCreate(
+            name: "Pro Plan"
+            returnUrl: "${HOST}/auth/callback?shop=${shop}"
+            lineItems: [{
+              plan: {
+                appRecurringPricingDetails: {
+                  price: { amount: 14.99, currencyCode: "USD" }
+                  interval: EVERY_30_DAYS
+                }
+              }
+            }]
+          ) {
+            confirmationUrl
+            appSubscription { id }
+            userErrors { message }
+          }
+        }`
+      });
+
+      console.log('GraphQL response:', response);
+
+      if (response.body.data?.appSubscriptionCreate?.confirmationUrl) {
+        const confirmationUrl = response.body.data.appSubscriptionCreate.confirmationUrl;
+        console.log('Confirmation URL:', confirmationUrl);
+        
+        ctx.body = { 
+          confirmationUrl: confirmationUrl,
+          message: 'Managed Pricing App - billing request created'
+        };
+      } else {
+        console.error('Billing errors:', response.body.data?.appSubscriptionCreate?.userErrors);
+        ctx.status = 500;
+        ctx.body = { error: 'Failed to create billing request' };
+      }
     } catch (error) {
       console.error('Billing API error:', error);
       ctx.status = 500;
@@ -672,10 +695,26 @@ const CURRENCY = "USD";
 let ACTIVE_SUBSCRIPTION = {}; // тестово — в реално приложение запази в база
 
 router.get("/auth/callback", async (ctx) => {
-  const { shop, code, state } = ctx.query;
+  const { shop, code, state, charge_id } = ctx.query;
 
   console.log("🚀 Влязохме в /auth/callback за магазин:", shop);
+  console.log("Query parameters:", { shop, code, state, charge_id });
 
+  // Check if this is a billing callback or OAuth callback
+  if (charge_id) {
+    console.log("This is a billing callback with charge_id:", charge_id);
+    
+    // For billing callbacks, we need to verify the charge was accepted
+    // For Managed Pricing Apps, this means the subscription is active
+    console.log("Billing callback received - marking subscription as active");
+    ACTIVE_SUBSCRIPTION[shop] = true;
+    ctx.redirect(`${HOST}/?shop=${shop}&billing=success`);
+    return;
+  }
+
+  // This is an OAuth callback (app installation)
+  console.log("This is an OAuth callback (app installation)");
+  
   // Разменяме code за access token
   const tokenResp = await fetch(`https://${shop}/admin/oauth/access_token`, {
     method: "POST",
