@@ -502,55 +502,25 @@ router.get('/api/billing/create', authenticateRequest, async (ctx) => {
     console.log('This is a Managed Pricing App - using billing API...');
     
     try {
-      // For Managed Pricing Apps, we need to use the billing API
-      // This will automatically handle the billing flow
+      // For Managed Pricing Apps, we need to redirect to app installation
+      // where Shopify will handle billing automatically
       
-      console.log('This is a Managed Pricing App - using billing API...');
+      console.log('This is a Managed Pricing App - redirecting to app installation...');
+      console.log('Shopify will handle billing automatically during app installation');
       
-      // For Managed Pricing Apps, we need to create a billing request
-      // that will be handled by Shopify automatically
-      const billingResponse = await fetch(`https://${shop}/admin/api/2024-01/recurring_application_charges.json`, {
-        method: 'POST',
-        headers: {
-          'X-Shopify-Access-Token': ctx.state.session.accessToken,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          recurring_application_charge: {
-            name: 'Pro Plan',
-            price: 14.99,
-            currency: 'USD',
-            trial_days: 5,
-            return_url: `${HOST}/api/billing/callback?shop=${shop}`
-          }
-        })
-      });
-
-      console.log('Billing response status:', billingResponse.status);
-      console.log('Billing response headers:', Object.fromEntries(billingResponse.headers.entries()));
+      // Redirect to the app installation page
+      // Shopify will automatically handle billing during installation
+      const redirectUri = encodeURIComponent(`${HOST}/api/billing/callback`);
+      const appInstallUrl = `https://${shop}/admin/oauth/authorize?client_id=${SHOPIFY_API_KEY}&scope=${SCOPES}&redirect_uri=${redirectUri}&state=${shop}`;
       
-      const responseText = await billingResponse.text();
-      console.log('Billing response text:', responseText);
+      console.log('Redirect URI:', `${HOST}/api/billing/callback`);
+      console.log('Encoded redirect URI:', redirectUri);
+      console.log('App install URL:', appInstallUrl);
       
-      let billingData;
-      try {
-        billingData = JSON.parse(responseText);
-        console.log('Billing response parsed:', billingData);
-      } catch (error) {
-        console.error('Failed to parse billing response:', error);
-        console.error('Response text was:', responseText);
-        throw new Error('Invalid JSON response from Shopify API');
-      }
-
-      if (billingData.recurring_application_charge) {
-        const confirmationUrl = billingData.recurring_application_charge.confirmation_url;
-        ctx.body = { 
-          confirmationUrl: confirmationUrl,
-          message: 'Managed Pricing App - billing request created'
-        };
-      } else {
-        throw new Error('Failed to create billing request');
-      }
+      ctx.body = { 
+        confirmationUrl: appInstallUrl,
+        message: 'Managed Pricing App - redirecting to app installation'
+      };
 
       // GraphQL response is already handled above
     } catch (error) {
