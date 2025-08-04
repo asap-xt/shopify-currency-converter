@@ -502,36 +502,55 @@ router.get('/api/billing/create', authenticateRequest, async (ctx) => {
     console.log('This is a Managed Pricing App - using billing API...');
     
     try {
-      // Create a billing request using the Shopify API
-      const billingResponse = await fetch(`https://${shop}/admin/api/2024-10/recurring_application_charges.json`, {
-        method: 'POST',
-        headers: {
-          'X-Shopify-Access-Token': ctx.state.session.accessToken,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          recurring_application_charge: {
-            name: 'Pro Plan',
-            price: 14.99,
-            currency: 'USD',
-            trial_days: 5,
-            return_url: `${HOST}/api/billing/callback?shop=${shop}`
-          }
-        })
+      // For Managed Pricing Apps, we need to use GraphQL API
+      // The REST API doesn't work for Managed Pricing Apps
+      
+      console.log('Using GraphQL API for Managed Pricing App...');
+      
+      const graphqlQuery = `mutation {
+        appSubscriptionCreate(
+          name: "Pro Plan"
+          returnUrl: "${HOST}/api/billing/callback?shop=${shop}"
+          lineItems: [{
+            plan: {
+              appRecurringPricingDetails: {
+                price: { amount: 14.99, currencyCode: USD }
+                interval: EVERY_30_DAYS
+              }
+            }
+          }]
+        ) {
+          confirmationUrl
+          appSubscription { id }
+          userErrors { message }
+        }
+      }`;
+
+      console.log('GraphQL query:', graphqlQuery);
+      
+      const response = await client.query({
+        data: graphqlQuery
       });
 
-      const billingData = await billingResponse.json();
-      console.log('Billing response:', billingData);
+      console.log('GraphQL response:', response.body);
+      
+      const { confirmationUrl, userErrors } = response.body.data.appSubscriptionCreate;
 
-      if (billingData.recurring_application_charge) {
-        const confirmationUrl = billingData.recurring_application_charge.confirmation_url;
-        ctx.body = { 
-          confirmationUrl: confirmationUrl,
-          message: 'Managed Pricing App - billing request created'
-        };
-      } else {
-        throw new Error('Failed to create billing request');
+      if (userErrors?.length > 0) {
+        console.error('GraphQL errors:', userErrors);
+        throw new Error(userErrors[0].message);
       }
+
+      if (!confirmationUrl) {
+        throw new Error('No confirmation URL received');
+      }
+
+      ctx.body = { 
+        confirmationUrl: confirmationUrl,
+        message: 'Managed Pricing App - GraphQL billing request created'
+      };
+
+      // GraphQL response is already handled above
     } catch (error) {
       console.error('Billing API error:', error);
       ctx.status = 500;
