@@ -511,7 +511,12 @@ router.get('/api/billing/create', authenticateRequest, async (ctx) => {
       
       // Redirect to the app installation page
       // Shopify will automatically handle billing during installation
-      const appInstallUrl = `https://${shop}/admin/oauth/authorize?client_id=${SHOPIFY_API_KEY}&scope=${SCOPES}&redirect_uri=${HOST}/api/billing/callback&state=${shop}`;
+      const redirectUri = encodeURIComponent(`${HOST}/api/billing/callback`);
+      const appInstallUrl = `https://${shop}/admin/oauth/authorize?client_id=${SHOPIFY_API_KEY}&scope=${SCOPES}&redirect_uri=${redirectUri}&state=${shop}`;
+      
+      console.log('Redirect URI:', `${HOST}/api/billing/callback`);
+      console.log('Encoded redirect URI:', redirectUri);
+      console.log('App install URL:', appInstallUrl);
       
       ctx.body = { 
         confirmationUrl: appInstallUrl,
