@@ -22,6 +22,7 @@ console.log('SHOPIFY_API_KEY length:', process.env.SHOPIFY_API_KEY?.length);
 console.log('SHOPIFY_API_SECRET length:', process.env.SHOPIFY_API_SECRET?.length);
 console.log('SCOPES length:', process.env.SCOPES?.length);
 console.log('HOST length:', process.env.HOST?.length);
+console.log('SCOPES value:', process.env.SCOPES);
 console.log('========================');
 
 // Session storage
@@ -342,8 +343,11 @@ async function authenticateRequest(ctx, next) {
       console.log('API Key set:', !!SHOPIFY_API_KEY);
       console.log('API Secret set:', !!SHOPIFY_API_SECRET);
       console.log('Host name:', HOST.replace('https://', ''));
-      console.log('Scopes:', SCOPES);
+      console.log('Scopes from env:', SCOPES);
+      console.log('Scopes array:', SCOPES.split(','));
+      console.log('Shopify API scopes:', shopify.config.scopes);
 
+      console.log('About to perform token exchange...');
       const tokenExchangeResult = await shopify.auth.tokenExchange({
         shop: shop,
         sessionToken: encodedSessionToken,
@@ -358,9 +362,15 @@ async function authenticateRequest(ctx, next) {
         associatedUser: tokenExchangeResult.associatedUser,
         accountOwner: tokenExchangeResult.accountOwner
       });
+      console.log('Full token exchange result:', JSON.stringify(tokenExchangeResult, null, 2));
 
       if (!tokenExchangeResult.accessToken) {
         console.error('Token exchange succeeded but no access token received');
+        console.error('This usually means:');
+        console.error('1. App is not installed in the store');
+        console.error('2. App does not have required scopes');
+        console.error('3. App is not properly configured in Partner Dashboard');
+        console.error('4. Store is not accessible');
         ctx.status = 500;
         ctx.body = 'Token exchange failed - no access token';
         return;
