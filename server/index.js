@@ -1164,7 +1164,8 @@ router.get('(/)', async (ctx) => {
         });
         
         if (!response.ok) {
-          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+          console.error('HTTP ' + response.status + ': ' + response.statusText);
+          throw new Error('HTTP ' + response.status + ': ' + response.statusText);
         }
         
         const data = await response.json();
