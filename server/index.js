@@ -1119,7 +1119,7 @@ router.get('(/)', async (ctx) => {
       try {
         const response = await fetch('/api/billing/create?shop=${shop}');
         const data = await response.json();
-        
+        console.log('Billing data:', data);
         if (data.confirmationUrl) {
           // Redirect to Shopify billing page
           window.top.location.href = data.confirmationUrl;
