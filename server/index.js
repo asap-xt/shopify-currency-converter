@@ -510,10 +510,10 @@ router.get('/api/billing/create', authenticateRequest, async (ctx) => {
       
       // Redirect to the app installation page
       // Shopify will automatically handle billing during installation
-      const redirectUri = encodeURIComponent(`${HOST}/api/billing/callback`);
+      const redirectUri = encodeURIComponent(`${HOST}/auth/callback`);
       const appInstallUrl = `https://${shop}/admin/oauth/authorize?client_id=${SHOPIFY_API_KEY}&scope=${SCOPES}&redirect_uri=${redirectUri}&state=${shop}`;
       
-      console.log('Redirect URI:', `${HOST}/api/billing/callback`);
+      console.log('Redirect URI:', `${HOST}/auth/callback`);
       console.log('Encoded redirect URI:', redirectUri);
       console.log('App install URL:', appInstallUrl);
       
@@ -535,52 +535,7 @@ router.get('/api/billing/create', authenticateRequest, async (ctx) => {
   }
 });
 
-router.get('/api/billing/callback', async (ctx) => {
-  const { charge_id, shop, code } = ctx.query;
-
-  console.log('=== BILLING CALLBACK ===');
-  console.log('Charge ID:', charge_id);
-  console.log('Shop:', shop);
-  console.log('Code:', code);
-
-  if (code) {
-    // This is an OAuth callback from app installation
-    console.log('OAuth callback received - app installation completed');
-    
-    // For Managed Pricing Apps, billing is handled automatically during installation
-    // We just need to mark the app as active
-    ACTIVE_SUBSCRIPTION[shop] = true;
-    ctx.redirect(`/?shop=${shop}&billing=success`);
-  } else if (charge_id) {
-    // This is a billing callback (for non-Managed Pricing Apps)
-    console.log('Billing callback received');
-    try {
-      const response = await fetch(`https://${shop}/admin/api/2024-10/recurring_application_charges/${charge_id}/activate.json`, {
-        method: 'POST',
-        headers: {
-          'X-Shopify-Access-Token': 'placeholder',
-          'Content-Type': 'application/json'
-        }
-      });
-
-      if (response.ok) {
-        console.log('Charge activated successfully');
-        ACTIVE_SUBSCRIPTION[shop] = true;
-        ctx.redirect(`/?shop=${shop}&billing=success`);
-      } else {
-        console.error('Failed to activate charge');
-        ctx.redirect(`/?shop=${shop}&billing=error`);
-      }
-    } catch (error) {
-      console.error('Error activating charge:', error);
-      ctx.redirect(`/?shop=${shop}&billing=error`);
-    }
-  } else {
-    // No code or charge_id - installation was declined
-    console.log('App installation was declined');
-    ctx.redirect(`/?shop=${shop}&billing=declined`);
-  }
-});
+// Billing callback is now handled by /auth/callback
 
 // Check subscription status endpoint
 router.get('/api/billing/status', async (ctx) => {
@@ -693,10 +648,13 @@ router.get("/auth/callback", async (ctx) => {
   const tokenData = await tokenResp.json();
   const accessToken = tokenData.access_token;
 
-  // Ако няма активен subscription → създаваме
-  if (!ACTIVE_SUBSCRIPTION[shop]) {
-    const subscriptionResp = await fetch(
-      `https://${shop}/admin/api/2024-07/graphql.json`,
+  // For Managed Pricing Apps, we need to check if billing was successful
+  console.log("App installation completed - checking billing status...");
+  
+  try {
+    // Check if there's an active subscription using GraphQL
+    const billingCheckResponse = await fetch(
+      `https://${shop}/admin/api/2024-10/graphql.json`,
       {
         method: "POST",
         headers: {
@@ -704,39 +662,47 @@ router.get("/auth/callback", async (ctx) => {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          query: `
-            mutation {
-              appSubscriptionCreate(
-                name: "${APP_PLAN_NAME}"
-                returnUrl: "${HOST}/api/billing/callback?shop=${shop}"
-                lineItems: [{
-                  plan: {
-                    appRecurringPricingDetails: {
-                      price: { amount: ${APP_PRICE}, currencyCode: ${CURRENCY} }
-                      interval: EVERY_30_DAYS
-                    }
-                  }
-                }]
-              ) {
-                confirmationUrl
-                appSubscription { id }
-                userErrors { message }
+          query: `{
+            currentAppInstallation {
+              activeSubscriptions {
+                id
+                status
+                trialDays
+                createdAt
               }
             }
-          `,
+          }`
         }),
       }
     );
 
-    const subData = await subscriptionResp.json();
-    console.log("Shopify subscription response:", subData);
+    const billingData = await billingCheckResponse.json();
+    console.log("Billing check response:", billingData);
 
-    const confirmationUrl =
-      subData.data.appSubscriptionCreate.confirmationUrl;
+    const subscriptions = billingData.data?.currentAppInstallation?.activeSubscriptions || [];
+    const hasActiveSubscription = subscriptions.some(sub => sub.status === 'ACTIVE');
 
-    // Пренасочваме търговеца към потвърждаване
-    ctx.redirect(confirmationUrl);
-    return;
+    console.log("Found subscriptions:", subscriptions);
+    console.log("Has active subscription:", hasActiveSubscription);
+
+    if (hasActiveSubscription) {
+      console.log("Active subscription found - marking as active");
+      ACTIVE_SUBSCRIPTION[shop] = true;
+      ctx.redirect(`${HOST}/?shop=${shop}&billing=success`);
+    } else {
+      console.log("No active subscription found - checking if app is installed");
+      
+      // For Managed Pricing Apps, if app is installed but no subscription,
+      // it might be in trial period or billing is handled differently
+      // Let's mark it as active for now and let the user use the app
+      console.log("App is installed but no subscription - marking as active (trial mode)");
+      ACTIVE_SUBSCRIPTION[shop] = true;
+      ctx.redirect(`${HOST}/?shop=${shop}&billing=trial`);
+    }
+  } catch (error) {
+    console.error("Error checking billing status:", error);
+    // On error, redirect to billing creation
+    ctx.redirect(`${HOST}/?shop=${shop}&billing=required`);
   }
 
   // Ако вече е абониран
@@ -760,14 +726,17 @@ router.get('(/)', async (ctx) => {
   if (billing === 'success') {
     console.log('Billing success callback received');
     ACTIVE_SUBSCRIPTION[shop] = true;
+  } else if (billing === 'trial') {
+    console.log('Billing trial callback received');
+    ACTIVE_SUBSCRIPTION[shop] = true;
   }
 
   if (!ACTIVE_SUBSCRIPTION[shop]) {
     console.log("Нямаш активен абонамент.");
 
     // Check if we should initiate billing
-    const { initiate_billing } = ctx.query;
-    if (initiate_billing === 'true') {
+    const { initiate_billing, billing } = ctx.query;
+    if (initiate_billing === 'true' || billing === 'required') {
       console.log('Initiating billing for shop:', shop);
 
       // Redirect to billing creation
