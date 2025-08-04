@@ -364,7 +364,10 @@ async function authenticateRequest(ctx, next) {
       });
       console.log('Full token exchange result:', JSON.stringify(tokenExchangeResult, null, 2));
 
-      if (!tokenExchangeResult.accessToken) {
+      // Check if access token is in the session object
+      const accessToken = tokenExchangeResult.accessToken || tokenExchangeResult.session?.accessToken;
+      
+      if (!accessToken) {
         console.error('Token exchange succeeded but no access token received');
         console.error('This usually means:');
         console.error('1. App is not installed in the store');
@@ -376,14 +379,18 @@ async function authenticateRequest(ctx, next) {
         return;
       }
 
+      console.log('Access token found:', accessToken.substring(0, 20) + '...');
+      console.log('Session scope:', tokenExchangeResult.session?.scope || tokenExchangeResult.scope);
+      console.log('Required scopes for billing:', 'read_customer_payment_methods,write_own_subscription_contracts');
+
       const sessionId = `offline_${shop}`;
       session = new Session({
         id: sessionId,
         shop: shop,
         state: 'active',
         isOnline: false,
-        accessToken: tokenExchangeResult.accessToken,
-        scope: tokenExchangeResult.scope,
+        accessToken: accessToken,
+        scope: tokenExchangeResult.session?.scope || tokenExchangeResult.scope,
       });
 
       await memorySessionStorage.storeSession(session);
@@ -489,25 +496,30 @@ router.get('/api/billing/create', authenticateRequest, async (ctx) => {
       session: ctx.state.session,
     });
 
-    const response = await client.query({
-      data: `mutation {
-        appSubscriptionCreate(
-          name: "Pro Plan"
-          returnUrl: "${HOST}/api/billing/callback?shop=${shop}"
-          lineItems: [{
-            plan: {
-              appRecurringPricingDetails: {
-                price: { amount: 14.99, currencyCode: "USD" }
-                interval: EVERY_30_DAYS
-              }
+    const graphqlQuery = `mutation {
+      appSubscriptionCreate(
+        name: "Pro Plan"
+        returnUrl: "${HOST}/api/billing/callback?shop=${shop}"
+        lineItems: [{
+          plan: {
+            appRecurringPricingDetails: {
+              price: { amount: 14.99, currencyCode: USD }
+              interval: EVERY_30_DAYS
             }
-          }]
-        ) {
-          confirmationUrl
-          appSubscription { id }
-          userErrors { message }
-        }
-      }`
+          }
+        }]
+      ) {
+        confirmationUrl
+        appSubscription { id }
+        userErrors { message }
+      }
+    }`;
+
+    console.log('Executing GraphQL query...');
+    console.log('GraphQL query:', graphqlQuery);
+    
+    const response = await client.query({
+      data: graphqlQuery
     });
 
     const { confirmationUrl, userErrors } = response.body.data.appSubscriptionCreate;
