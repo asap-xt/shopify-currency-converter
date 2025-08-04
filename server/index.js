@@ -1323,6 +1323,59 @@ router.get('/debug', async (ctx) => {
   };
 });
 
+// Check app installation
+router.get('/api/check-installation', authenticateRequest, async (ctx) => {
+  const shop = ctx.query.shop;
+  
+  if (!shop) {
+    ctx.status = 400;
+    ctx.body = { error: 'Missing shop parameter' };
+    return;
+  }
+
+  try {
+    console.log('=== CHECKING APP INSTALLATION ===');
+    console.log('Shop:', shop);
+    console.log('Session access token length:', ctx.state.session.accessToken?.length);
+
+    // Try to get app installation info
+    const response = await fetch(`https://${shop}/admin/api/2024-10/app_installations.json`, {
+      headers: {
+        'X-Shopify-Access-Token': ctx.state.session.accessToken,
+        'Content-Type': 'application/json'
+      }
+    });
+
+    const responseText = await response.text();
+    console.log('Installation check response:', {
+      status: response.status,
+      statusText: response.statusText,
+      body: responseText.substring(0, 500)
+    });
+
+    ctx.body = {
+      shop: shop,
+      installationCheck: {
+        status: response.status,
+        statusText: response.statusText,
+        hasAccessToken: !!ctx.state.session.accessToken,
+        accessTokenLength: ctx.state.session.accessToken?.length,
+        responseBody: responseText.substring(0, 500)
+      }
+    };
+  } catch (error) {
+    console.error('Installation check error:', error);
+    ctx.body = {
+      shop: shop,
+      installationCheck: {
+        error: error.message,
+        hasAccessToken: !!ctx.state.session.accessToken,
+        accessTokenLength: ctx.state.session.accessToken?.length
+      }
+    };
+  }
+});
+
 app.use(router.routes());
 app.use(router.allowedMethods());
 
