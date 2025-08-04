@@ -537,7 +537,7 @@ router.get('/api/billing/create', authenticateRequest, async (ctx) => {
 // Billing callback is now handled by /auth/callback
 
 // Check subscription status endpoint
-router.get('/api/billing/status', async (ctx) => {
+router.get('/api/billing/status', authenticateRequest, async (ctx) => {
   const shop = ctx.query.shop;
 
   if (!shop) {
@@ -546,11 +546,39 @@ router.get('/api/billing/status', async (ctx) => {
     return;
   }
 
-  // For Managed Pricing Apps, check real billing status
+  // For Managed Pricing Apps, check local storage first
   console.log('Checking subscription status for Managed Pricing App...');
+  console.log('Local storage status:', ACTIVE_SUBSCRIPTION[shop]);
+  console.log('Session exists:', !!ctx.state.session);
+  console.log('Session access token:', !!ctx.state.session?.accessToken);
+  
+  // Check local storage first for Managed Pricing Apps
+  const localSubscriptionStatus = ACTIVE_SUBSCRIPTION[shop] || false;
+  
+  if (localSubscriptionStatus) {
+    console.log('Found active subscription in local storage');
+    ctx.body = {
+      hasActiveSubscription: true,
+      shop: shop,
+      message: 'Managed Pricing App - active subscription found in local storage'
+    };
+    return;
+  }
   
   try {
-    // Check if there's an active subscription using GraphQL
+    // If not in local storage, check Shopify API
+    console.log('No local subscription found - checking Shopify API...');
+    
+    if (!ctx.state.session?.accessToken) {
+      console.log('No access token available - using local storage fallback');
+      ctx.body = {
+        hasActiveSubscription: false,
+        shop: shop,
+        message: 'Managed Pricing App - no access token, using local storage'
+      };
+      return;
+    }
+    
     const billingCheckResponse = await fetch(
       `https://${shop}/admin/api/2024-10/graphql.json`,
       {
@@ -587,7 +615,7 @@ router.get('/api/billing/status', async (ctx) => {
       hasActiveSubscription: hasActiveSubscription,
       shop: shop,
       subscriptions: subscriptions,
-      message: 'Managed Pricing App - real billing check'
+      message: 'Managed Pricing App - API billing check'
     };
   } catch (error) {
     console.error("Error checking billing status:", error);
