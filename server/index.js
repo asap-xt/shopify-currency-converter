@@ -714,6 +714,16 @@ router.get('(/)', async (ctx) => {
   <title>BGN/EUR Price Display</title>
   <meta name="shopify-api-key" content="${SHOPIFY_API_KEY}" />
   <script src="https://cdn.shopify.com/shopifycloud/app-bridge.js"></script>
+  <script>
+    // Initialize App Bridge
+    document.addEventListener('DOMContentLoaded', function() {
+      if (window.shopify && window.shopify.config) {
+        console.log('App Bridge initialized');
+      } else {
+        console.log('App Bridge not available');
+      }
+    });
+  </script>
   <style>
     body {
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
@@ -1149,12 +1159,50 @@ router.get('(/)', async (ctx) => {
     
     async function startBilling() {
       try {
-        // Get session token from Shopify App Bridge
-        const sessionToken = window.shopify?.config?.sessionToken;
+        // Try different methods to get session token
+        let sessionToken = null;
+        
+        // Method 1: Try App Bridge config
+        if (window.shopify?.config?.sessionToken) {
+          sessionToken = window.shopify.config.sessionToken;
+        }
+        // Method 2: Try App Bridge session
+        else if (window.shopify?.session?.token) {
+          sessionToken = window.shopify.session.token;
+        }
+        // Method 3: Try to get from URL parameter
+        else {
+          const urlParams = new URLSearchParams(window.location.search);
+          sessionToken = urlParams.get('id_token');
+        }
+        
+        // Method 4: Try to get from URL hash (for embedded apps)
         if (!sessionToken) {
+          const hashParams = new URLSearchParams(window.location.hash.substring(1));
+          sessionToken = hashParams.get('id_token');
+        }
+        
+        // Method 5: Try to get from parent window (for embedded apps)
+        if (!sessionToken && window.location !== window.parent.location) {
+          try {
+            const parentParams = new URLSearchParams(window.parent.location.search);
+            sessionToken = parentParams.get('id_token');
+          } catch (e) {
+            console.log('Cannot access parent window:', e.message);
+          }
+        }
+        
+        if (!sessionToken) {
+          console.error('No session token found. Available:', {
+            shopifyConfig: !!window.shopify?.config,
+            shopifySession: !!window.shopify?.session,
+            urlParams: window.location.search
+          });
           alert('Грешка: Няма session token. Моля опитайте отново.');
           return;
         }
+
+        console.log('Using session token:', sessionToken.substring(0, 20) + '...');
 
         const response = await fetch('/api/billing/create?shop=${shop}', {
           headers: {
@@ -1204,6 +1252,19 @@ router.get('(/)', async (ctx) => {
       alert('❌ Плащането беше отказано. Моля опитайте отново.');
     }
     
+    // Debug function to check App Bridge status
+    function debugAppBridge() {
+      console.log('=== APP BRIDGE DEBUG ===');
+      console.log('window.shopify:', !!window.shopify);
+      console.log('window.shopify.config:', !!window.shopify?.config);
+      console.log('window.shopify.session:', !!window.shopify?.session);
+      console.log('URL params:', window.location.search);
+      console.log('Is embedded:', window.location !== window.parent.location);
+      console.log('========================');
+    }
+    
+    // Check App Bridge status after a delay
+    setTimeout(debugAppBridge, 2000);
     setTimeout(loadAppData, 1000);
   </script>
 </body>
