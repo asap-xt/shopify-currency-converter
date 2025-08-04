@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 // server/index.js
 import 'dotenv/config';
 import '@shopify/shopify-api/adapters/node';
@@ -488,7 +487,7 @@ router.get('/api/billing/callback', async (ctx) => {
 // Check subscription status endpoint
 router.get('/api/billing/status', async (ctx) => {
   const shop = ctx.query.shop;
-  
+
   if (!shop) {
     ctx.status = 400;
     ctx.body = { error: 'Missing shop parameter' };
@@ -497,7 +496,7 @@ router.get('/api/billing/status', async (ctx) => {
 
   // Check if shop has active subscription
   const hasActiveSubscription = ACTIVE_SUBSCRIPTION[shop] || false;
-  
+
   ctx.body = {
     hasActiveSubscription: hasActiveSubscription,
     shop: shop
@@ -518,7 +517,7 @@ router.get('/api/test', authenticateRequest, async (ctx) => {
 router.get('/api/shop', async (ctx) => {
   console.log('=== SHOP INFO API ===');
   const shop = ctx.query.shop;
-  
+
   if (!shop) {
     ctx.status = 400;
     ctx.body = { error: 'Missing shop parameter' };
@@ -2144,8 +2143,8 @@ router.get('(/)', async (ctx) => {
     <div class="quick-action">
       <h3>Бърз старт</h3>
       <p style="margin-bottom: 20px;">Инсталирайте extension-а с едно кликване:</p>
-      <a href="https://${shop}/admin/themes/current/editor?context=checkout&template=checkout" 
-         class="big-button" 
+      <a href="https://${shop}/admin/themes/current/editor?context=checkout&template=checkout"
+         class="big-button"
          target="_blank">
         Отвори Theme Editor
       </a>
@@ -2202,7 +2201,7 @@ router.get('(/)', async (ctx) => {
             </div>
           </div>
         </div>
-        
+
         <div class="warning">
           <div>
             <strong>Важно:</strong> В настройките на магазина трябва да имате България като отделен пазар. Цените в BGN/EUR се показват само за поръчки в български лева (BGN) с адрес на доставка в България.
@@ -2226,10 +2225,10 @@ router.get('(/)', async (ctx) => {
       <p style="margin-top: 8px;">Нужда от помощ? Свържете се с нас на emarketingbg@gmail.com</p>
     </div>
   </div>
-  
+
   <script>
     let billingStatus = null;
-    
+
     async function loadAppData() {
       console.log('loadAppData');
       try {
@@ -2240,7 +2239,7 @@ router.get('(/)', async (ctx) => {
           console.log('Shop data loaded:', data);
           document.getElementById('loading').style.display = 'none';
           document.getElementById('status-badge').style.display = 'inline-block';
-          
+
           // Check billing status
           checkBillingStatus();
         } else if (response.status === 302 || response.redirected) {
@@ -2255,7 +2254,7 @@ router.get('(/)', async (ctx) => {
         document.getElementById('loading').innerHTML = 'Грешка при зареждане';
       }
     }
-    
+
     async function checkBillingStatus() {
       console.log('checkBillingStatus');
       try {
@@ -2273,7 +2272,7 @@ router.get('(/)', async (ctx) => {
         console.error('Error checking billing:', error);
       }
     }
-    
+
     function showBillingPrompt() {
       const billingPrompt = \`
         <div style="background: #fff3cd; border: 2px solid #ffc107; border-radius: 8px; padding: 24px; margin-bottom: 24px; text-align: center;">
@@ -2291,22 +2290,22 @@ router.get('(/)', async (ctx) => {
           </a>
         </div>
       \`;
-      
+
       // Insert billing prompt before main content
       const container = document.querySelector('.container');
       const header = document.querySelector('.header');
       header.insertAdjacentHTML('afterend', billingPrompt);
-      
+
       // Hide main functionality
       document.querySelector('.quick-action').style.opacity = '0.5';
       document.querySelector('.quick-action').style.pointerEvents = 'none';
     }
-    
+
     async function startBilling() {
       try {
         const response = await fetch('/api/billing/create?shop=${shop}');
         const data = await response.json();
-        
+
         if (data.confirmationUrl) {
           // Redirect to Shopify billing page
           window.top.location.href = data.confirmationUrl;
@@ -2318,7 +2317,7 @@ router.get('(/)', async (ctx) => {
         alert('Грешка при стартиране на пробен период. Моля опитайте отново.');
       }
     }
-    
+
     function showTab(tabName) {
       // Hide all tabs
       document.querySelectorAll('.tab-content').forEach(content => {
@@ -2327,12 +2326,12 @@ router.get('(/)', async (ctx) => {
       document.querySelectorAll('.tab').forEach(tab => {
         tab.classList.remove('active');
       });
-      
+
       // Show selected tab
       document.getElementById(tabName).classList.add('active');
       event.target.classList.add('active');
     }
-    
+
     // Check URL parameters for billing status
     const urlParams = new URLSearchParams(window.location.search);
     if (urlParams.get('billing') === 'success') {
@@ -2340,7 +2339,7 @@ router.get('(/)', async (ctx) => {
     } else if (urlParams.get('billing') === 'declined') {
       alert('❌ Плащането беше отказано. Моля опитайте отново.');
     }
-    
+
     setTimeout(loadAppData, 1000);
   </script>
 </body>
@@ -2386,5 +2385,4 @@ app.listen(PORT, '0.0.0.0', function () {
 }).on('error', (err) => {
   console.error('FATAL: Server failed to start:', err);
   process.exit(1);
->>>>>>> 76e2cc7236cb35ff84df0ce855cb9c96edd7c73d
 });
