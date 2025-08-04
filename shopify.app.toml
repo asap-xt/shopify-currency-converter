@@ -22,7 +22,7 @@ dev_store_url = "https://asapxt-teststore.myshopify.com"
 include_config_on_deploy = true
 
 [access_scopes]
-scopes = "read_products,write_products,read_orders,write_themes,read_locations,read_app_subscriptions,write_app_subscriptions,write_orders,read_shop"
+scopes = "read_products,write_products,read_orders,write_themes,read_locations,write_orders"
 
 [[build.extensions]]
 type = "ui_extension"
