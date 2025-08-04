@@ -49,18 +49,17 @@ const {
   SHOPIFY_API_KEY,
   SHOPIFY_API_SECRET,
   SCOPES,
-  HOST,
-  HOST_NAME
+  HOST
 } = process.env;
 
 // Validation
-if (!SHOPIFY_API_KEY || !SHOPIFY_API_SECRET || !SCOPES || !HOST_NAME) {
+if (!SHOPIFY_API_KEY || !SHOPIFY_API_SECRET || !SCOPES || !HOST) {
   console.error('FATAL: Missing required environment variables!');
   console.error('Missing:', {
     SHOPIFY_API_KEY: !SHOPIFY_API_KEY,
     SHOPIFY_API_SECRET: !SHOPIFY_API_SECRET,
     SCOPES: !SCOPES,
-    HOST_NAME: !HOST_NAME
+    HOST: !HOST
   });
   process.exit(1);
 }
@@ -70,7 +69,7 @@ const shopify = shopifyApi({
   apiKey: SHOPIFY_API_KEY,
   apiSecretKey: SHOPIFY_API_SECRET,
   scopes: SCOPES.split(','),
-  hostName: HOST_NAME,
+  hostName: HOST.replace('https://', ''),
   apiVersion: LATEST_API_VERSION,
   isEmbeddedApp: true,
   sessionStorage: memorySessionStorage,
@@ -327,7 +326,7 @@ async function authenticateRequest(ctx, next) {
       console.log('Session token starts with:', encodedSessionToken.substring(0, 20));
       console.log('API Key set:', !!SHOPIFY_API_KEY);
       console.log('API Secret set:', !!SHOPIFY_API_SECRET);
-      console.log('Host name:', HOST_NAME);
+      console.log('Host name:', HOST.replace('https://', ''));
       console.log('Scopes:', SCOPES);
 
       const tokenExchangeResult = await shopify.auth.tokenExchange({
@@ -1150,7 +1149,24 @@ router.get('(/)', async (ctx) => {
     
     async function startBilling() {
       try {
-        const response = await fetch('/api/billing/create?shop=${shop}');
+        // Get session token from Shopify App Bridge
+        const sessionToken = window.shopify?.config?.sessionToken;
+        if (!sessionToken) {
+          alert('Грешка: Няма session token. Моля опитайте отново.');
+          return;
+        }
+
+        const response = await fetch('/api/billing/create?shop=${shop}', {
+          headers: {
+            'Authorization': 'Bearer ' + sessionToken,
+            'Content-Type': 'application/json'
+          }
+        });
+        
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+        
         const data = await response.json();
         console.log('Billing data:', data);
         if (data.confirmationUrl) {
