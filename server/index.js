@@ -1322,6 +1322,51 @@ router.get('(/)', async (ctx) => {
       try {
         console.log('Starting billing for managed pricing app...');
         
+        // Try different methods to get session token
+        let sessionToken = null;
+        
+        // Method 1: Try App Bridge config
+        if (window.shopify?.config?.sessionToken) {
+          sessionToken = window.shopify.config.sessionToken;
+        }
+        // Method 2: Try App Bridge session
+        else if (window.shopify?.session?.token) {
+          sessionToken = window.shopify.session.token;
+        }
+        // Method 3: Try to get from URL parameter
+        else {
+          const urlParams = new URLSearchParams(window.location.search);
+          sessionToken = urlParams.get('id_token');
+        }
+        
+        // Method 4: Try to get from URL hash (for embedded apps)
+        if (!sessionToken) {
+          const hashParams = new URLSearchParams(window.location.hash.substring(1));
+          sessionToken = hashParams.get('id_token');
+        }
+        
+        // Method 5: Try to get from parent window (for embedded apps)
+        if (!sessionToken && window.location !== window.parent.location) {
+          try {
+            const parentParams = new URLSearchParams(window.parent.location.search);
+            sessionToken = parentParams.get('id_token');
+          } catch (e) {
+            console.log('Cannot access parent window:', e.message);
+          }
+        }
+        
+        if (!sessionToken) {
+          console.error('No session token found. Available:', {
+            shopifyConfig: !!window.shopify?.config,
+            shopifySession: !!window.shopify?.session,
+            urlParams: window.location.search
+          });
+          alert('Грешка: Няма session token. Моля опитайте отново.');
+          return;
+        }
+
+        console.log('Using session token:', sessionToken.substring(0, 20) + '...');
+        
         const response = await fetch('/api/billing/create?shop=${shop}', {
           headers: {
             'Authorization': 'Bearer ' + sessionToken,
