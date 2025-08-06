@@ -485,29 +485,72 @@ router.get('/api/billing/create', authenticateRequest, async (ctx) => {
     console.log('=== BILLING CREATE FOR MANAGED PRICING APP ===');
     const shop = ctx.state.shop;
     
-    // За Managed Pricing Apps, Shopify автоматично управлява billing
-    // НЕ можете да създавате абонаменти програмно
+    console.log('Creating billing subscription for shop:', shop);
     
-    console.log('This is a Managed Pricing App');
-    console.log('Billing is handled automatically by Shopify during app installation');
-    console.log('The merchant needs to approve charges through the Shopify App Store');
+    // За Managed Pricing Apps, използвайте GraphQL за да създадете абонамент
+    const client = new shopify.clients.Graphql({
+      session: ctx.state.session,
+    });
+
+    // Създайте абонамент чрез GraphQL
+    const response = await client.query({
+      data: `
+        mutation appSubscriptionCreate($name: String!, $returnUrl: URL!, $trialDays: Int!, $test: Boolean!) {
+          appSubscriptionCreate(
+            name: $name
+            returnUrl: $returnUrl
+            trialDays: $trialDays
+            test: $test
+          ) {
+            appSubscription {
+              id
+            }
+            confirmationUrl
+            userErrors {
+              field
+              message
+            }
+          }
+        }
+      `,
+      variables: {
+        name: "Basic Plan",
+        returnUrl: `${HOST}/auth/callback?shop=${shop}`,
+        trialDays: 5,
+        test: process.env.NODE_ENV !== 'production'
+      }
+    });
+
+    console.log('GraphQL response:', response.body);
+
+    if (response.body.data?.appSubscriptionCreate?.userErrors?.length > 0) {
+      console.error('GraphQL errors:', response.body.data.appSubscriptionCreate.userErrors);
+      ctx.status = 400;
+      ctx.body = { 
+        error: 'billing_creation_failed',
+        message: response.body.data.appSubscriptionCreate.userErrors[0].message
+      };
+      return;
+    }
+
+    const confirmationUrl = response.body.data?.appSubscriptionCreate?.confirmationUrl;
     
-    // Вместо да пренасочвате към OAuth (което вече е направено),
-    // покажете инструкции или пренасочете към Shopify billing страница
-    
-    const billingPageUrl = `https://${shop}/admin/apps/${SHOPIFY_API_KEY}/billing`;
-    
-    ctx.body = {
-      error: 'managed_pricing_app',
-      message: 'This is a Managed Pricing App. Billing is handled by Shopify.',
-      instructions: 'Please approve the charges in your Shopify admin.',
-      billingUrl: billingPageUrl
-    };
+    if (confirmationUrl) {
+      console.log('Billing confirmation URL:', confirmationUrl);
+      ctx.body = {
+        confirmationUrl: confirmationUrl,
+        message: 'Billing subscription created successfully'
+      };
+    } else {
+      console.error('No confirmation URL received');
+      ctx.status = 500;
+      ctx.body = { error: 'No confirmation URL received' };
+    }
     
   } catch (error) {
     console.error('Billing error:', error);
     ctx.status = 500;
-    ctx.body = { error: 'Failed to process billing request' };
+    ctx.body = { error: 'Failed to process billing request: ' + error.message };
   }
 });
 
@@ -1377,28 +1420,14 @@ router.get('(/)', async (ctx) => {
         const data = await response.json();
         console.log('Billing response:', data);
         
-        if (data.error === 'managed_pricing_app') {
-          // За Managed Pricing Apps, покажете различно съобщение
-          alert(\`
-За да активирате абонамента:
-
-1. Отворете Shopify Admin
-2. Отидете в Apps > ${SHOPIFY_API_KEY}
-3. Одобрете таксите за приложението
-4. След одобрение, опреснете тази страница
-
-Billing се управлява автоматично от Shopify.
-          \`);
-          
-          // Опционално: отворете billing страницата в нов таб
-          if (data.billingUrl) {
-            window.open(data.billingUrl, '_blank');
-          }
-          
+        if (data.error === 'billing_creation_failed') {
+          alert('Грешка при създаване на абонамент: ' + data.message);
           return;
         }
         
         if (data.confirmationUrl) {
+          console.log('Redirecting to billing confirmation:', data.confirmationUrl);
+          // Пренасочете към Shopify billing modal
           window.top.location.href = data.confirmationUrl;
         } else {
           alert('Грешка при стартиране на абонамент.');
