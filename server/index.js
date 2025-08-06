@@ -554,50 +554,54 @@ router.get('/api/billing/status', authenticateRequest, async (ctx) => {
       return;
     }
     
-    // ... останалата логика за проверка ...
-    
-    // 4. Алтернативно решение - проверете app charges вместо subscriptions
-    async function checkManagedPricingCharges(shop, accessToken) {
-      try {
-        // За Managed Pricing Apps, проверете app charges
-        const response = await fetch(
-          `https://${shop}/admin/api/2024-10/recurring_application_charges.json`,
-          {
-            headers: {
-              'X-Shopify-Access-Token': accessToken,
-              'Content-Type': 'application/json'
+    // ВИНАГИ проверявайте реалния статус от Shopify API
+    const billingCheckResponse = await fetch(
+      `https://${shop}/admin/api/2024-10/graphql.json`,
+      {
+        method: "POST",
+        headers: {
+          "X-Shopify-Access-Token": ctx.state.session.accessToken,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          query: `{
+            currentAppInstallation {
+              activeSubscriptions {
+                id
+                status
+                trialDays
+                createdAt
+                test
+              }
             }
-          }
-        );
-        
-        if (response.ok) {
-          const data = await response.json();
-          const charges = data.recurring_application_charges || [];
-          const activeCharge = charges.find(charge => charge.status === 'active');
-          
-          console.log('Recurring charges:', charges);
-          console.log('Active charge found:', !!activeCharge);
-          
-          return !!activeCharge;
-        }
-      } catch (error) {
-        console.error('Error checking charges:', error);
+          }`
+        }),
       }
-      
-        return false;
-}
+    );
 
-// 5. Добавете debug endpoint за изчистване на кеша
-router.get('/api/clear-cache', async (ctx) => {
-  const shop = ctx.query.shop;
-  if (shop) {
-    delete SUBSCRIPTION_CACHE[shop];
-    ctx.body = { message: 'Cache cleared for shop: ' + shop };
-  } else {
-    SUBSCRIPTION_CACHE = {};
-    ctx.body = { message: 'All cache cleared' };
-  }
-});
+    const billingData = await billingCheckResponse.json();
+    console.log("Real billing check response:", billingData);
+
+    // Проверка за грешки
+    if (billingData.errors) {
+      console.error('GraphQL errors:', billingData.errors);
+      ctx.body = {
+        hasActiveSubscription: false,
+        shop: shop,
+        error: 'GraphQL query error',
+        message: billingData.errors[0]?.message
+      };
+      return;
+    }
+
+    const subscriptions = billingData.data?.currentAppInstallation?.activeSubscriptions || [];
+    
+    // Филтрирайте тестови абонаменти ако сте в production
+    const activeSubscriptions = process.env.NODE_ENV === 'production' 
+      ? subscriptions.filter(sub => sub.status === 'ACTIVE' && !sub.test)
+      : subscriptions.filter(sub => sub.status === 'ACTIVE');
+    
+    const hasActiveSubscription = activeSubscriptions.length > 0;
 
     console.log("Found subscriptions:", subscriptions);
     console.log("Active subscriptions:", activeSubscriptions);
@@ -626,6 +630,18 @@ router.get('/api/clear-cache', async (ctx) => {
       error: error.message,
       message: 'Error checking billing - defaulting to false'
     };
+  }
+});
+
+// 5. Добавете debug endpoint за изчистване на кеша
+router.get('/api/clear-cache', async (ctx) => {
+  const shop = ctx.query.shop;
+  if (shop) {
+    delete SUBSCRIPTION_CACHE[shop];
+    ctx.body = { message: 'Cache cleared for shop: ' + shop };
+  } else {
+    SUBSCRIPTION_CACHE = {};
+    ctx.body = { message: 'All cache cleared' };
   }
 });
 
