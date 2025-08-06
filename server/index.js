@@ -521,10 +521,23 @@ router.get('/api/billing/create', authenticateRequest, async (ctx) => {
       }
     });
 
+    console.log('GraphQL response:', JSON.stringify(response.body, null, 2));
+
     console.log('GraphQL response:', response.body);
 
+    // Проверка за GraphQL грешки
+    if (response.body.errors && response.body.errors.length > 0) {
+      console.error('GraphQL errors:', response.body.errors);
+      ctx.status = 400;
+      ctx.body = { 
+        error: 'billing_creation_failed',
+        message: response.body.errors[0].message || 'GraphQL error occurred'
+      };
+      return;
+    }
+
     if (response.body.data?.appSubscriptionCreate?.userErrors?.length > 0) {
-      console.error('GraphQL errors:', response.body.data.appSubscriptionCreate.userErrors);
+      console.error('GraphQL user errors:', response.body.data.appSubscriptionCreate.userErrors);
       ctx.status = 400;
       ctx.body = { 
         error: 'billing_creation_failed',
