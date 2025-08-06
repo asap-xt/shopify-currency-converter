@@ -479,65 +479,41 @@ router.get("/billing/confirm", async (ctx) => {
   ctx.body = "Абонаментът е активиран! 🎉 Можеш да ползваш приложението.";
 });
 
-// Billing endpoints
+// 1. ПРОМЕНЕТЕ /api/billing/create за Managed Pricing Apps
 router.get('/api/billing/create', authenticateRequest, async (ctx) => {
   try {
-    console.log('=== BILLING CREATE DEBUG ===');
-    const shop = ctx.query.shop;
-    if (!shop) {
-      ctx.status = 400;
-      ctx.body = { error: 'Missing shop parameter' };
-      return;
-    }
-
-    console.log('Creating billing for shop:', shop);
-
-    // Create a proper billing subscription using GraphQL
-    const client = new shopify.clients.Graphql({
-      session: ctx.state.session,
-    });
-
-    // For Managed Pricing Apps, we need to use the billing API
-    // This will automatically handle the billing flow
+    console.log('=== BILLING CREATE FOR MANAGED PRICING APP ===');
+    const shop = ctx.state.shop;
     
-    console.log('This is a Managed Pricing App - using billing API...');
+    // За Managed Pricing Apps, Shopify автоматично управлява billing
+    // НЕ можете да създавате абонаменти програмно
     
-    try {
-      // For Managed Pricing Apps, we cannot use Billing API
-      // Instead, we need to redirect to the app installation
-      // where Shopify will handle billing automatically
-      
-      console.log('This is a Managed Pricing App - redirecting to app installation...');
-      console.log('Shopify will handle billing automatically during app installation');
-      
-      // Redirect to the app installation page
-      // Shopify will automatically handle billing during installation
-      const redirectUri = encodeURIComponent(`${HOST}/auth/callback`);
-      const appInstallUrl = `https://${shop}/admin/oauth/authorize?client_id=${SHOPIFY_API_KEY}&scope=${SCOPES}&redirect_uri=${redirectUri}&state=${shop}`;
-      
-      console.log('Redirect URI:', `${HOST}/auth/callback`);
-      console.log('Encoded redirect URI:', redirectUri);
-      console.log('App install URL:', appInstallUrl);
-      
-      ctx.body = { 
-        confirmationUrl: appInstallUrl,
-        message: 'Managed Pricing App - redirecting to app installation'
-      };
-    } catch (error) {
-      console.error('Billing API error:', error);
-      ctx.status = 500;
-      ctx.body = { error: 'Failed to create billing request: ' + error.message };
-    }
+    console.log('This is a Managed Pricing App');
+    console.log('Billing is handled automatically by Shopify during app installation');
+    console.log('The merchant needs to approve charges through the Shopify App Store');
+    
+    // Вместо да пренасочвате към OAuth (което вече е направено),
+    // покажете инструкции или пренасочете към Shopify billing страница
+    
+    const billingPageUrl = `https://${shop}/admin/apps/${SHOPIFY_API_KEY}/billing`;
+    
+    ctx.body = {
+      error: 'managed_pricing_app',
+      message: 'This is a Managed Pricing App. Billing is handled by Shopify.',
+      instructions: 'Please approve the charges in your Shopify admin.',
+      billingUrl: billingPageUrl
+    };
+    
   } catch (error) {
-    console.error('Create subscription error:', error);
+    console.error('Billing error:', error);
     ctx.status = 500;
-    ctx.body = { error: 'Failed to create subscription' };
+    ctx.body = { error: 'Failed to process billing request' };
   }
 });
 
 // Billing callback is now handled by /auth/callback
 
-// Обновете /api/billing/status да винаги проверява реалния статус
+// 3. ВАЖНО: Изчистете кеша при всяка промяна
 router.get('/api/billing/status', authenticateRequest, async (ctx) => {
   const shop = ctx.query.shop;
 
@@ -550,12 +526,21 @@ router.get('/api/billing/status', authenticateRequest, async (ctx) => {
   console.log('=== CHECKING REAL BILLING STATUS ===');
   console.log('Shop:', shop);
   
-  // Проверка за кеширан резултат (опционално)
+  // ПРЕМАХНЕТЕ кеша за Managed Pricing Apps или намалете времето
+  const CACHE_DURATION = 30 * 1000; // 30 секунди вместо 5 минути
+  
   const cached = SUBSCRIPTION_CACHE[shop];
   if (cached && cached.timestamp > Date.now() - CACHE_DURATION) {
-    console.log('Returning cached billing status');
-    ctx.body = cached.data;
-    return;
+    console.log('Cache age:', Date.now() - cached.timestamp, 'ms');
+    // Ако няма активен абонамент, НЕ използвайте кеша
+    if (!cached.data.hasActiveSubscription) {
+      console.log('No active subscription in cache - forcing fresh check');
+      delete SUBSCRIPTION_CACHE[shop];
+    } else {
+      console.log('Returning cached billing status');
+      ctx.body = cached.data;
+      return;
+    }
   }
   
   try {
@@ -569,54 +554,50 @@ router.get('/api/billing/status', authenticateRequest, async (ctx) => {
       return;
     }
     
-    // ВИНАГИ проверявайте реалния статус от Shopify API
-    const billingCheckResponse = await fetch(
-      `https://${shop}/admin/api/2024-10/graphql.json`,
-      {
-        method: "POST",
-        headers: {
-          "X-Shopify-Access-Token": ctx.state.session.accessToken,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          query: `{
-            currentAppInstallation {
-              activeSubscriptions {
-                id
-                status
-                trialDays
-                createdAt
-                test
-              }
+    // ... останалата логика за проверка ...
+    
+    // 4. Алтернативно решение - проверете app charges вместо subscriptions
+    async function checkManagedPricingCharges(shop, accessToken) {
+      try {
+        // За Managed Pricing Apps, проверете app charges
+        const response = await fetch(
+          `https://${shop}/admin/api/2024-10/recurring_application_charges.json`,
+          {
+            headers: {
+              'X-Shopify-Access-Token': accessToken,
+              'Content-Type': 'application/json'
             }
-          }`
-        }),
+          }
+        );
+        
+        if (response.ok) {
+          const data = await response.json();
+          const charges = data.recurring_application_charges || [];
+          const activeCharge = charges.find(charge => charge.status === 'active');
+          
+          console.log('Recurring charges:', charges);
+          console.log('Active charge found:', !!activeCharge);
+          
+          return !!activeCharge;
+        }
+      } catch (error) {
+        console.error('Error checking charges:', error);
       }
-    );
+      
+        return false;
+}
 
-    const billingData = await billingCheckResponse.json();
-    console.log("Real billing check response:", billingData);
-
-    // Проверка за грешки
-    if (billingData.errors) {
-      console.error('GraphQL errors:', billingData.errors);
-      ctx.body = {
-        hasActiveSubscription: false,
-        shop: shop,
-        error: 'GraphQL query error',
-        message: billingData.errors[0]?.message
-      };
-      return;
-    }
-
-    const subscriptions = billingData.data?.currentAppInstallation?.activeSubscriptions || [];
-    
-    // Филтрирайте тестови абонаменти ако сте в production
-    const activeSubscriptions = process.env.NODE_ENV === 'production' 
-      ? subscriptions.filter(sub => sub.status === 'ACTIVE' && !sub.test)
-      : subscriptions.filter(sub => sub.status === 'ACTIVE');
-    
-    const hasActiveSubscription = activeSubscriptions.length > 0;
+// 5. Добавете debug endpoint за изчистване на кеша
+router.get('/api/clear-cache', async (ctx) => {
+  const shop = ctx.query.shop;
+  if (shop) {
+    delete SUBSCRIPTION_CACHE[shop];
+    ctx.body = { message: 'Cache cleared for shop: ' + shop };
+  } else {
+    SUBSCRIPTION_CACHE = {};
+    ctx.body = { message: 'All cache cleared' };
+  }
+});
 
     console.log("Found subscriptions:", subscriptions);
     console.log("Active subscriptions:", activeSubscriptions);
@@ -1267,6 +1248,29 @@ router.get('(/)', async (ctx) => {
        }
      }
     
+    // 6. За Managed Pricing Apps - показвайте различно UI
+    const managedPricingPrompt = \`
+      <div style="background: #d1ecf1; border: 2px solid #0c5460; border-radius: 8px; padding: 24px; margin-bottom: 24px;">
+        <h3 style="margin: 0 0 16px 0; color: #0c5460;">ℹ️ Managed Pricing App</h3>
+        <p style="margin: 0 0 16px 0; color: #0c5460;">
+          Това приложение използва Shopify Managed Pricing.<br>
+          Абонаментът се управлява автоматично от Shopify.
+        </p>
+        <p style="margin: 0; color: #0c5460;">
+          Ако нямате активен абонамент:<br>
+          1. Преинсталирайте приложението от App Store<br>
+          2. Одобрете таксите при инсталация<br>
+          3. Shopify автоматично ще активира абонамента
+        </p>
+        <a href="https://apps.shopify.com/bgn-eur-price-display" 
+           target="_blank" 
+           class="big-button" 
+           style="background: #0c5460; color: white; margin-top: 16px;">
+          Отвори в App Store
+        </a>
+      </div>
+    \`;
+    
     function showBillingPrompt() {
       console.log('=== SHOWING BILLING PROMPT ===');
       console.log('Billing status is false - showing prompt');
@@ -1297,53 +1301,11 @@ router.get('(/)', async (ctx) => {
       document.querySelector('.quick-action').style.pointerEvents = 'none';
     }
     
+    // 2. ОБНОВЕТЕ клиентския JavaScript да обработва managed pricing отговора
     async function startBilling() {
       try {
-        // Try different methods to get session token
-        let sessionToken = null;
+        console.log('Starting billing for managed pricing app...');
         
-        // Method 1: Try App Bridge config
-        if (window.shopify?.config?.sessionToken) {
-          sessionToken = window.shopify.config.sessionToken;
-        }
-        // Method 2: Try App Bridge session
-        else if (window.shopify?.session?.token) {
-          sessionToken = window.shopify.session.token;
-        }
-        // Method 3: Try to get from URL parameter
-        else {
-          const urlParams = new URLSearchParams(window.location.search);
-          sessionToken = urlParams.get('id_token');
-        }
-        
-        // Method 4: Try to get from URL hash (for embedded apps)
-        if (!sessionToken) {
-          const hashParams = new URLSearchParams(window.location.hash.substring(1));
-          sessionToken = hashParams.get('id_token');
-        }
-        
-        // Method 5: Try to get from parent window (for embedded apps)
-        if (!sessionToken && window.location !== window.parent.location) {
-          try {
-            const parentParams = new URLSearchParams(window.parent.location.search);
-            sessionToken = parentParams.get('id_token');
-          } catch (e) {
-            console.log('Cannot access parent window:', e.message);
-          }
-        }
-        
-        if (!sessionToken) {
-          console.error('No session token found. Available:', {
-            shopifyConfig: !!window.shopify?.config,
-            shopifySession: !!window.shopify?.session,
-            urlParams: window.location.search
-          });
-          alert('Грешка: Няма session token. Моля опитайте отново.');
-          return;
-        }
-
-        console.log('Using session token:', sessionToken.substring(0, 20) + '...');
-
         const response = await fetch('/api/billing/create?shop=${shop}', {
           headers: {
             'Authorization': 'Bearer ' + sessionToken,
@@ -1351,22 +1313,38 @@ router.get('(/)', async (ctx) => {
           }
         });
         
-        if (!response.ok) {
-          console.error('HTTP ' + response.status + ': ' + response.statusText);
-          throw new Error('HTTP ' + response.status + ': ' + response.statusText);
+        const data = await response.json();
+        console.log('Billing response:', data);
+        
+        if (data.error === 'managed_pricing_app') {
+          // За Managed Pricing Apps, покажете различно съобщение
+          alert(\`
+За да активирате абонамента:
+
+1. Отворете Shopify Admin
+2. Отидете в Apps > ${SHOPIFY_API_KEY}
+3. Одобрете таксите за приложението
+4. След одобрение, опреснете тази страница
+
+Billing се управлява автоматично от Shopify.
+          \`);
+          
+          // Опционално: отворете billing страницата в нов таб
+          if (data.billingUrl) {
+            window.open(data.billingUrl, '_blank');
+          }
+          
+          return;
         }
         
-        const data = await response.json();
-        console.log('Billing data:', data);
         if (data.confirmationUrl) {
-          // Redirect to Shopify billing page
           window.top.location.href = data.confirmationUrl;
         } else {
-          alert('Грешка при стартиране на пробен период. Моля опитайте отново.');
+          alert('Грешка при стартиране на абонамент.');
         }
       } catch (error) {
         console.error('Billing error:', error);
-        alert('Грешка при стартиране на пробен период. Моля опитайте отново.');
+        alert('Грешка при обработка на заявката.');
       }
     }
     
