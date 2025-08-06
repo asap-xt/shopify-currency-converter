@@ -6,9 +6,14 @@ import Router from 'koa-router';
 import koaSession from 'koa-session';
 import { shopifyApi, LATEST_API_VERSION } from '@shopify/shopify-api';
 
-const { SHOPIFY_API_KEY, SHOPIFY_API_SECRET, SCOPES, HOST, PORT = 3000 } = process.env;
+const {
+  SHOPIFY_API_KEY,
+  SHOPIFY_API_SECRET,
+  SCOPES,       // например "read_products,write_orders"
+  HOST,         // например "https://my-app.example.com"
+  PORT = 3000
+} = process.env;
 
-// 1) Конфигуриране на shopify-api
 const shopify = shopifyApi({
   apiKey:        SHOPIFY_API_KEY,
   apiSecretKey:  SHOPIFY_API_SECRET,
@@ -16,39 +21,61 @@ const shopify = shopifyApi({
   hostName:      HOST.replace(/^https?:\/\//, ''),
   apiVersion:    LATEST_API_VERSION,
   isEmbeddedApp: true,
-  auth: { useOnlineTokens: true },   // Token Exchange
+  auth:          { useOnlineTokens: true },  // online tokens, ако искате offline – сменете на false
+  // sessionStorage: // по подразбиране е MemorySessionStorage от adapter-а
 });
 
 const app = new Koa();
-app.keys = [ SHOPIFY_API_SECRET ];
+app.keys = [SHOPIFY_API_SECRET];
 app.use(koaSession({ sameSite: 'none', secure: true }, app));
 
 const router = new Router();
 
-// 2) Започваме OAuth/Token Exchange
+// ─── OAuth ────────────────────────────────────────────────────
 router.get('/auth', async (ctx) => {
-  await shopify.auth.beginAuth(
-    ctx.req, ctx.res, ctx.query.shop, '/auth/callback', false
+  const shop = ctx.query.shop;
+  const redirectUrl = await shopify.auth.beginAuth(
+    ctx.req, ctx.res, shop, '/auth/callback', false
   );
+  ctx.redirect(redirectUrl);
 });
 router.get('/auth/callback', async (ctx) => {
   const session = await shopify.auth.validateAuthCallback(
     ctx.req, ctx.res, ctx.query
   );
-  // насочваме към billing процеса
+  // след валидиране сесията е записана в storage
   ctx.redirect(`/api/billing/create?shop=${session.shop}`);
 });
 
-// 3) Endpoint за създаване на AppSubscription
+// ─── CREATE BILLING SUBSCRIPTION ──────────────────────────────
 router.get('/api/billing/create', async (ctx) => {
-  const session = await shopify.session.getCurrentSession(ctx.req, ctx.res);
-  const client  = new shopify.clients.Graphql({ session });
+  // 1) взимаме ID на текущата сесия (online)
+  const sessionId = await shopify.session.getCurrentId({
+    rawRequest:  ctx.req,
+    rawResponse: ctx.res,
+    isOnline:    true
+  });
+  if (!sessionId) {
+    return ctx.redirect(`/auth?shop=${ctx.query.shop}`);
+  }
+  // 2) зареждаме сесията от storage
+  const session = await shopify.config.sessionStorage.loadSession(sessionId);
+  if (!session) throw new Error('No Shopify session found');
 
-  const mutation = `
-    mutation appSubscriptionCreate($name: String!, $returnUrl: URL!, $test: Boolean!) {
+  const client = new shopify.clients.Graphql({ session });
+
+  // GraphQL мутация за recurring charge + пробен период
+  const MUTATION = `
+    mutation appSubscriptionCreate(
+      $name: String!,
+      $returnUrl: URL!,
+      $trialDays: Int!,
+      $test: Boolean!
+    ) {
       appSubscriptionCreate(
         name: $name,
         returnUrl: $returnUrl,
+        trialDays: $trialDays,
         lineItems: [
           {
             plan: {
@@ -66,32 +93,37 @@ router.get('/api/billing/create', async (ctx) => {
       }
     }
   `;
-
-  const variables = {
-    name:      "Basic Plan",                                      // име на абонамента
-    returnUrl: `${HOST}/api/billing/callback`,                   // къде да върне Shopify
-    test:      process.env.NODE_ENV !== 'production',            // true в дев
+  const vars = {
+    name:      "Basic Plan",
+    returnUrl: `${HOST}/api/billing/callback`,
+    trialDays: 5,
+    test:      process.env.NODE_ENV !== 'production'
   };
 
-  const resp = await client.query({ data: { query: mutation, variables } });
-
+  const resp = await client.query({ data: { query: MUTATION, variables: vars } });
   const errs = resp.body.data.appSubscriptionCreate.userErrors;
-  if (errs.length) {
-    ctx.throw(400, errs.map(e => e.message).join('; '));
-  }
+  if (errs.length) ctx.throw(400, errs.map(e => e.message).join('; '));
 
-  // пренасочваме търговеца към Shopify за потвърждение
   ctx.redirect(resp.body.data.appSubscriptionCreate.confirmationUrl);
 });
 
-// 4) Callback след одобрение на абонамента
+// ─── BILLING CALLBACK ─────────────────────────────────────────
 router.get('/api/billing/callback', async (ctx) => {
-  const session = await shopify.session.getCurrentSession(ctx.req, ctx.res);
-  const client  = new shopify.clients.Graphql({ session });
-
-  // Shopify връща ?id=<subscriptionId>
+  // отново charge ID-то идва в query: ?id=<subscriptionId>
   const subscriptionId = ctx.query.id;
-  const query = `
+  // пак зареждаме сесията
+  const sessionId = await shopify.session.getCurrentId({
+    rawRequest:  ctx.req,
+    rawResponse: ctx.res,
+    isOnline:    true
+  });
+  const session = sessionId
+    ? await shopify.config.sessionStorage.loadSession(sessionId)
+    : null;
+  if (!session) throw new Error('No Shopify session on billing callback');
+
+  const client = new shopify.clients.Graphql({ session });
+  const QUERY = `
     query getSubscription($id: ID!) {
       node(id: $id) {
         ... on AppSubscription {
@@ -102,25 +134,26 @@ router.get('/api/billing/callback', async (ctx) => {
       }
     }
   `;
-  const { body } = await client.query({ data: { query, variables: { id: subscriptionId } } });
+  const { body } = await client.query({ data: { query: QUERY, variables: { id: subscriptionId } } });
   const subscription = body.data.node;
 
-  // TODO: запиши subscription (например в база данни):
-  // await saveToDatabase({ shop: session.shop, subscription });
+  // TODO: запиши subscription в твоята DB: shop + subscription
+  // await saveSub({ shop: session.shop, subscription });
 
-  // можеш да покажеш потвърждение или да редиректнеш
   ctx.redirect(`/?billing=success`);
 });
 
-// 5) Главен route за embedded app
+// ─── FALLBACK ROUTE ("/") ──────────────────────────────────────
 router.get('/', async (ctx) => {
+  // при зареждане във iframe Shopify изпраща shop query param
   const shop = ctx.query.shop;
-  
-  // Проверяваме дали има валидна сесия
-  const session = await shopify.session.getCurrentSession(ctx.req, ctx.res);
-  
-  if (!session) {
-    // Ако няма сесия, пренасочваме към OAuth
+  // ако няма валидна сесия, пак към /auth
+  const sessionId = await shopify.session.getCurrentId({
+    rawRequest:  ctx.req,
+    rawResponse: ctx.res,
+    isOnline:    true
+  });
+  if (!sessionId) {
     return ctx.redirect(`/auth?shop=${shop}`);
   }
   
@@ -294,7 +327,4 @@ router.get('/', async (ctx) => {
 
 app.use(router.routes());
 app.use(router.allowedMethods());
-
-app.listen(PORT, () => {
-  console.log(`App listening on port ${PORT}`);
-});
+app.listen(PORT, () => console.log(`> App listening on port ${PORT}`));
