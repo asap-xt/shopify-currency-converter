@@ -486,6 +486,19 @@ router.get('/api/billing/create', authenticateRequest, async (ctx) => {
     const shop = ctx.state.shop;
     
     console.log('Creating billing subscription for shop:', shop);
+    console.log('Session scopes:', ctx.state.session.scope);
+    console.log('Required scopes for billing:', 'write_own_subscription_contracts');
+    
+    // Проверка за необходимите scopes
+    if (!ctx.state.session.scope.includes('write_own_subscription_contracts')) {
+      console.error('Missing required scope: write_own_subscription_contracts');
+      ctx.status = 400;
+      ctx.body = { 
+        error: 'missing_scope',
+        message: 'App does not have required billing permissions. Please reinstall the app with billing scopes.'
+      };
+      return;
+    }
     
     // За Managed Pricing Apps, използвайте GraphQL за да създадете абонамент
     const client = new shopify.clients.Graphql({
@@ -1435,6 +1448,11 @@ router.get('(/)', async (ctx) => {
         
         if (data.error === 'billing_creation_failed') {
           alert('Грешка при създаване на абонамент: ' + data.message);
+          return;
+        }
+        
+        if (data.error === 'missing_scope') {
+          alert('Приложението няма необходимите права за billing. Моля преинсталирайте приложението от App Store.');
           return;
         }
         
