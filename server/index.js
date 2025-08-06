@@ -57,9 +57,11 @@ const memorySessionStorage = {
 const {
   SHOPIFY_API_KEY,
   SHOPIFY_API_SECRET,
-  SCOPES,
   HOST
 } = process.env;
+
+// Използвайте scopes от shopify.app.toml за Managed Billing
+const SCOPES = "read_products,write_products,read_orders,write_themes,read_locations,read_app_subscriptions,write_app_subscriptions,write_orders";
 
 // Validation
 console.log('=== VALIDATION CHECK ===');
@@ -487,11 +489,11 @@ router.get('/api/billing/create', authenticateRequest, async (ctx) => {
     
     console.log('Creating billing subscription for shop:', shop);
     console.log('Session scopes:', ctx.state.session.scope);
-    console.log('Required scopes for billing:', 'write_own_subscription_contracts');
+    console.log('Required scopes for billing:', 'write_app_subscriptions');
     
     // Проверка за необходимите scopes
-    if (!ctx.state.session.scope.includes('write_own_subscription_contracts')) {
-      console.error('Missing required scope: write_own_subscription_contracts');
+    if (!ctx.state.session.scope.includes('write_app_subscriptions')) {
+      console.error('Missing required scope: write_app_subscriptions');
       ctx.status = 400;
       ctx.body = { 
         error: 'missing_scope',
