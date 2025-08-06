@@ -474,7 +474,8 @@ async function requiresSubscription(ctx, next) {
 
 router.get("/billing/confirm", async (ctx) => {
   const { shop } = ctx.query;
-  ACTIVE_SUBSCRIPTION[shop] = true;
+  // Изчистете кеша за да форсирате нова проверка
+  delete SUBSCRIPTION_CACHE[shop];
   ctx.body = "Абонаментът е активиран! 🎉 Можеш да ползваш приложението.";
 });
 
@@ -536,7 +537,7 @@ router.get('/api/billing/create', authenticateRequest, async (ctx) => {
 
 // Billing callback is now handled by /auth/callback
 
-// Check subscription status endpoint
+// Обновете /api/billing/status да винаги проверява реалния статус
 router.get('/api/billing/status', authenticateRequest, async (ctx) => {
   const shop = ctx.query.shop;
 
@@ -546,39 +547,29 @@ router.get('/api/billing/status', authenticateRequest, async (ctx) => {
     return;
   }
 
-  // For Managed Pricing Apps, check local storage first
-  console.log('Checking subscription status for Managed Pricing App...');
-  console.log('Local storage status:', ACTIVE_SUBSCRIPTION[shop]);
-  console.log('Session exists:', !!ctx.state.session);
-  console.log('Session access token:', !!ctx.state.session?.accessToken);
+  console.log('=== CHECKING REAL BILLING STATUS ===');
+  console.log('Shop:', shop);
   
-  // Check local storage first for Managed Pricing Apps
-  const localSubscriptionStatus = ACTIVE_SUBSCRIPTION[shop] || false;
-  
-  if (localSubscriptionStatus) {
-    console.log('Found active subscription in local storage');
-    ctx.body = {
-      hasActiveSubscription: true,
-      shop: shop,
-      message: 'Managed Pricing App - active subscription found in local storage'
-    };
+  // Проверка за кеширан резултат (опционално)
+  const cached = SUBSCRIPTION_CACHE[shop];
+  if (cached && cached.timestamp > Date.now() - CACHE_DURATION) {
+    console.log('Returning cached billing status');
+    ctx.body = cached.data;
     return;
   }
   
   try {
-    // If not in local storage, check Shopify API
-    console.log('No local subscription found - checking Shopify API...');
-    
     if (!ctx.state.session?.accessToken) {
-      console.log('No access token available - using local storage fallback');
+      console.log('No access token - app not properly installed');
       ctx.body = {
         hasActiveSubscription: false,
         shop: shop,
-        message: 'Managed Pricing App - no access token, using local storage'
+        message: 'No access token - app not installed'
       };
       return;
     }
     
+    // ВИНАГИ проверявайте реалния статус от Shopify API
     const billingCheckResponse = await fetch(
       `https://${shop}/admin/api/2024-10/graphql.json`,
       {
@@ -595,6 +586,7 @@ router.get('/api/billing/status', authenticateRequest, async (ctx) => {
                 status
                 trialDays
                 createdAt
+                test
               }
             }
           }`
@@ -603,29 +595,55 @@ router.get('/api/billing/status', authenticateRequest, async (ctx) => {
     );
 
     const billingData = await billingCheckResponse.json();
-    console.log("Billing check response:", billingData);
+    console.log("Real billing check response:", billingData);
+
+    // Проверка за грешки
+    if (billingData.errors) {
+      console.error('GraphQL errors:', billingData.errors);
+      ctx.body = {
+        hasActiveSubscription: false,
+        shop: shop,
+        error: 'GraphQL query error',
+        message: billingData.errors[0]?.message
+      };
+      return;
+    }
 
     const subscriptions = billingData.data?.currentAppInstallation?.activeSubscriptions || [];
-    const hasActiveSubscription = subscriptions.some(sub => sub.status === 'ACTIVE');
+    
+    // Филтрирайте тестови абонаменти ако сте в production
+    const activeSubscriptions = process.env.NODE_ENV === 'production' 
+      ? subscriptions.filter(sub => sub.status === 'ACTIVE' && !sub.test)
+      : subscriptions.filter(sub => sub.status === 'ACTIVE');
+    
+    const hasActiveSubscription = activeSubscriptions.length > 0;
 
     console.log("Found subscriptions:", subscriptions);
+    console.log("Active subscriptions:", activeSubscriptions);
     console.log("Has active subscription:", hasActiveSubscription);
 
-    ctx.body = {
+    const responseData = {
       hasActiveSubscription: hasActiveSubscription,
       shop: shop,
       subscriptions: subscriptions,
-      message: 'Managed Pricing App - API billing check'
+      activeCount: activeSubscriptions.length,
+      message: 'Real-time billing check from Shopify API'
     };
+
+    // Кеширайте резултата
+    SUBSCRIPTION_CACHE[shop] = {
+      timestamp: Date.now(),
+      data: responseData
+    };
+
+    ctx.body = responseData;
   } catch (error) {
     console.error("Error checking billing status:", error);
-    // Fallback to local storage
-    const hasActiveSubscription = ACTIVE_SUBSCRIPTION[shop] || false;
     ctx.body = {
-      hasActiveSubscription: hasActiveSubscription,
+      hasActiveSubscription: false,
       shop: shop,
       error: error.message,
-      message: 'Managed Pricing App - fallback to local storage'
+      message: 'Error checking billing - defaulting to false'
     };
   }
 });
@@ -693,34 +711,29 @@ router.get('/api/orders', authenticateRequest, requiresSubscription, async (ctx)
   }
 });
 
-const APP_PLAN_NAME = "Pro Plan";
-const APP_PRICE = 14.99;
-const CURRENCY = "USD";
-let ACTIVE_SUBSCRIPTION = {}; // тестово — в реално приложение запази в база
+// Премахнете локалното хранилище или го използвайте само като кеш
+let SUBSCRIPTION_CACHE = {}; // Преименувайте за яснота
+const CACHE_DURATION = 5 * 60 * 1000; // 5 минути кеш
 
+// Обновете /auth/callback да НЕ маркира автоматично като активен
 router.get("/auth/callback", async (ctx) => {
   const { shop, code, state, charge_id } = ctx.query;
 
   console.log("🚀 Влязохме в /auth/callback за магазин:", shop);
   console.log("Query parameters:", { shop, code, state, charge_id });
 
-  // Check if this is a billing callback or OAuth callback
+  // Check if this is a billing callback
   if (charge_id) {
     console.log("This is a billing callback with charge_id:", charge_id);
-    
-    // For billing callbacks, we need to verify the charge was accepted
-    // For Managed Pricing Apps, this means the subscription is active
-    console.log("Billing callback received - marking subscription as active");
-    ACTIVE_SUBSCRIPTION[shop] = true;
+    // Изчистете кеша за да форсирате нова проверка
+    delete SUBSCRIPTION_CACHE[shop];
     ctx.redirect(`${HOST}/?shop=${shop}&billing=success`);
     return;
   }
 
-  // This is an OAuth callback (app installation)
+  // OAuth callback - само получавате access token
   console.log("This is an OAuth callback (app installation)");
-  console.log("For Managed Pricing Apps, Shopify handles billing automatically during installation");
   
-  // Разменяме code за access token
   const tokenResp = await fetch(`https://${shop}/admin/oauth/access_token`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -733,66 +746,65 @@ router.get("/auth/callback", async (ctx) => {
   const tokenData = await tokenResp.json();
   const accessToken = tokenData.access_token;
 
-  // For Managed Pricing Apps, we need to check if billing was successful
-  console.log("App installation completed - checking billing status...");
+  // Запазете access token в сесията
+  const sessionId = `offline_${shop}`;
+  const session = new Session({
+    id: sessionId,
+    shop: shop,
+    state: 'active',
+    isOnline: false,
+    accessToken: accessToken,
+    scope: tokenData.scope,
+  });
+  await memorySessionStorage.storeSession(session);
+
+  // НЕ маркирайте като активен абонамент!
+  // Нека API проверката да определи реалния статус
+  console.log("App installed - redirecting to check billing status");
   
+  // Пренасочете към главната страница където ще се провери billing статуса
+  ctx.redirect(`${HOST}/?shop=${shop}&checkBilling=true`);
+});
+
+// Добавете webhook за деинсталиране на приложението
+router.post('/webhooks/app/uninstalled', async (ctx) => {
   try {
-    // Check if there's an active subscription using GraphQL
-    const billingCheckResponse = await fetch(
-      `https://${shop}/admin/api/2024-10/graphql.json`,
-      {
-        method: "POST",
-        headers: {
-          "X-Shopify-Access-Token": accessToken,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          query: `{
-            currentAppInstallation {
-              activeSubscriptions {
-                id
-                status
-                trialDays
-                createdAt
-              }
-            }
-          }`
-        }),
-      }
-    );
+    const hmacHeader = ctx.get('X-Shopify-Hmac-Sha256');
+    const body = ctx.request.rawBody;
 
-    const billingData = await billingCheckResponse.json();
-    console.log("Billing check response:", billingData);
+    // Verify HMAC
+    const hash = crypto
+      .createHmac('sha256', SHOPIFY_API_SECRET)
+      .update(body, 'utf8')
+      .digest('base64');
 
-    const subscriptions = billingData.data?.currentAppInstallation?.activeSubscriptions || [];
-    const hasActiveSubscription = subscriptions.some(sub => sub.status === 'ACTIVE');
-
-    console.log("Found subscriptions:", subscriptions);
-    console.log("Has active subscription:", hasActiveSubscription);
-
-    if (hasActiveSubscription) {
-      console.log("Active subscription found - marking as active");
-      ACTIVE_SUBSCRIPTION[shop] = true;
-      ctx.redirect(`${HOST}/?shop=${shop}&billing=success`);
-    } else {
-      console.log("No active subscription found - but app is installed");
-      
-      // For Managed Pricing Apps, if app is installed successfully,
-      // Shopify automatically handles the billing and subscription
-      // The subscription might not be immediately visible in the API
-      // but the app is functional and billing is handled
-      console.log("App is installed - marking as active (Managed Pricing App)");
-      ACTIVE_SUBSCRIPTION[shop] = true;
-      ctx.redirect(`${HOST}/?shop=${shop}&billing=success`);
+    if (hash !== hmacHeader) {
+      ctx.status = 401;
+      ctx.body = 'Unauthorized';
+      return;
     }
-  } catch (error) {
-    console.error("Error checking billing status:", error);
-    // On error, redirect to billing creation
-    ctx.redirect(`${HOST}/?shop=${shop}&billing=required`);
-  }
 
-  // Ако вече е абониран
-  ctx.redirect(`${HOST}/?shop=${shop}`);
+    const data = JSON.parse(body);
+    const shop = data.shop_domain || data.shop;
+    
+    console.log('App uninstalled from shop:', shop);
+    
+    // Изчистете всички данни за този магазин
+    delete SUBSCRIPTION_CACHE[shop];
+    
+    // Изтрийте сесиите
+    const sessions = await memorySessionStorage.findSessionsByShop(shop);
+    for (const session of sessions) {
+      await memorySessionStorage.deleteSession(session.id);
+    }
+    
+    ctx.status = 200;
+    ctx.body = { message: 'Uninstall webhook processed' };
+  } catch (error) {
+    console.error('Uninstall webhook error:', error);
+    ctx.status = 500;
+    ctx.body = 'Internal server error';
+  }
 });
 
 // Main app route
@@ -807,33 +819,17 @@ router.get('(/)', async (ctx) => {
     return;
   }
 
-  // Check if this is a billing callback
-  const { billing, initiate_billing } = ctx.query;
+  // НЕ проверявайте локално хранилище тук
+  // Оставете клиентския код да провери чрез API
+  
+  const { billing, checkBilling } = ctx.query;
   if (billing === 'success') {
     console.log('Billing success callback received');
-    ACTIVE_SUBSCRIPTION[shop] = true;
-  } else if (billing === 'trial') {
-    console.log('Billing trial callback received');
-    ACTIVE_SUBSCRIPTION[shop] = true;
+    // Изчистете кеша за да форсирате нова проверка
+    delete SUBSCRIPTION_CACHE[shop];
   }
 
-  // Check if we should initiate billing
-  if (initiate_billing === 'true' || billing === 'required') {
-    console.log('Initiating billing for shop:', shop);
-
-    // Redirect to billing creation
-    ctx.redirect(`/api/billing/create?shop=${shop}`);
-    return;
-  }
-
-  // For Managed Pricing Apps, we need to check real billing status
-  // instead of relying on local storage
-  if (!ACTIVE_SUBSCRIPTION[shop]) {
-    console.log("Нямаш активен абонамент в local storage - проверявам реалния статус...");
-    
-    // We'll let the app check billing status via API
-    // instead of blocking access here
-  }
+  // Вашият HTML остава същият...
 
   ctx.set('Content-Type', 'text/html');
   ctx.body = `
@@ -1500,10 +1496,41 @@ app.use(router.allowedMethods());
 
 const PORT = process.env.PORT || 3000;
 
+// Функция за регистриране на webhooks
+async function registerWebhooks(shop, accessToken) {
+  try {
+    const webhook = {
+      webhook: {
+        topic: 'app/uninstalled',
+        address: `${HOST}/webhooks/app/uninstalled`,
+        format: 'json'
+      }
+    };
+    
+    const response = await fetch(`https://${shop}/admin/api/2024-10/webhooks.json`, {
+      method: 'POST',
+      headers: {
+        'X-Shopify-Access-Token': accessToken,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(webhook)
+    });
+    
+    if (response.ok) {
+      console.log('Webhook registered successfully for shop:', shop);
+    } else {
+      console.error('Failed to register webhook for shop:', shop);
+    }
+  } catch (error) {
+    console.error('Error registering webhook:', error);
+  }
+}
+
 app.listen(PORT, '0.0.0.0', function () {
   console.log(`✓ Server listening on port ${PORT}`);
   console.log(`✓ Using Token Exchange authentication (Shopify managed install)`);
   console.log(`✓ App URL: ${HOST}`);
+  console.log(`✓ Webhook endpoint: ${HOST}/webhooks/app/uninstalled`);
 }).on('error', (err) => {
   console.error('FATAL: Server failed to start:', err);
   process.exit(1);
