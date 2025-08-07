@@ -450,12 +450,18 @@ router.get('/api/billing/status', authenticateRequest, async (ctx) => {
   console.log('=== CHECKING BILLING STATUS ===');
   console.log('Shop:', shop);
   
-  // Check cache
-  const cached = SUBSCRIPTION_CACHE[shop];
-  if (cached && cached.timestamp > Date.now() - CACHE_DURATION) {
-    console.log('Returning cached billing status');
-    ctx.body = cached.data;
-    return;
+  // Force fresh check if coming from billing
+  if (ctx.query.billing === 'success' || ctx.query.charge_id || ctx.query.return_status === 'success') {
+    console.log('Coming from billing, skipping cache');
+    // Skip cache
+  } else {
+    // Check cache
+    const cached = SUBSCRIPTION_CACHE[shop];
+    if (cached && cached.timestamp > Date.now() - CACHE_DURATION) {
+      console.log('Returning cached billing status');
+      ctx.body = cached.data;
+      return;
+    }
   }
   
   try {
@@ -897,12 +903,16 @@ router.get('(/)', async (ctx) => {
     return;
   }
 
-  // For embedded apps, we should not check for session here
-  // Let the frontend handle authentication via App Bridge
+  // Check if coming back from billing
+  const { billing, charge_id } = ctx.query;
+  if (billing === 'success' || charge_id) {
+    console.log('Billing success callback received, clearing cache');
+    delete SUBSCRIPTION_CACHE[shop];
+  }
   
-  const { billing } = ctx.query;
-  if (billing === 'success') {
-    console.log('Billing success callback received');
+  // Also check for Shopify's standard return parameters
+  if (ctx.query.return_status === 'success') {
+    console.log('Shopify return status success, clearing cache');
     delete SUBSCRIPTION_CACHE[shop];
   }
 
@@ -1468,12 +1478,25 @@ router.get('(/)', async (ctx) => {
     // Check URL parameters for billing status
     const urlParams = new URLSearchParams(window.location.search);
     const billing = urlParams.get('billing');
+    const chargeId = urlParams.get('charge_id');
+    const returnStatus = urlParams.get('return_status');
     
-    if (billing === 'success') {
+    if (billing === 'success' || chargeId || returnStatus === 'success') {
+      console.log('Billing success detected, forcing cache refresh');
+      
+      // Force refresh billing status
+      setTimeout(async () => {
+        billingStatus = null; // Clear local status
+        await checkBillingStatus(); // Force recheck
+      }, 1000);
+      
       alert('🎉 Успешно активирахте плана! Вече можете да използвате всички функции.');
-      // Remove the parameter from URL
+      
+      // Clean URL
       const newUrl = new URL(window.location);
       newUrl.searchParams.delete('billing');
+      newUrl.searchParams.delete('charge_id');
+      newUrl.searchParams.delete('return_status');
       window.history.replaceState({}, document.title, newUrl.toString());
     } else if (billing === 'error') {
       alert('❌ Възникна грешка при активиране на плана. Моля опитайте отново.');
