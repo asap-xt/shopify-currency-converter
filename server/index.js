@@ -532,6 +532,8 @@ router.get('/auth', async (ctx) => {
       shop,
       callbackPath: '/auth/callback',
       isOnline: false, // Use offline tokens for billing
+      rawRequest: ctx.req,
+      rawResponse: ctx.res,
     });
     
     console.log('Redirecting to:', authRoute);
