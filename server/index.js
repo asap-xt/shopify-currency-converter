@@ -142,6 +142,8 @@ function redirectToSessionTokenBouncePage(ctx) {
 
 // Session token bounce page
 router.get('/session-token-bounce', async (ctx) => {
+  const shop = ctx.query.shop || ctx.query['shopify-reload']?.match(/shop=([^&]+)/)?.[1];
+  
   ctx.set('Content-Type', 'text/html');
   ctx.body = `
     <!DOCTYPE html>
@@ -149,8 +151,45 @@ router.get('/session-token-bounce', async (ctx) => {
       <head>
         <meta name="shopify-api-key" content="${SHOPIFY_API_KEY}" />
         <script src="https://cdn.shopify.com/shopifycloud/app-bridge.js"></script>
+        <script>
+          document.addEventListener('DOMContentLoaded', async function() {
+            console.log('Session token bounce page loaded');
+            
+            // Get the redirect URL from query params
+            const params = new URLSearchParams(window.location.search);
+            const redirectUrl = params.get('shopify-reload');
+            
+            if (redirectUrl) {
+              // Try to get session token
+              if (window.shopify?.idToken) {
+                try {
+                  const token = await window.shopify.idToken();
+                  console.log('Got session token, redirecting...');
+                  
+                  // Add token to URL and redirect
+                  const url = new URL(redirectUrl, window.location.origin);
+                  url.searchParams.set('id_token', token);
+                  window.location.href = url.toString();
+                } catch (err) {
+                  console.error('Failed to get token:', err);
+                  window.location.href = redirectUrl;
+                }
+              } else {
+                console.log('No App Bridge available, redirecting anyway...');
+                window.location.href = redirectUrl;
+              }
+            } else {
+              // No redirect URL, go to main app
+              window.location.href = '/?shop=${shop || ''}';
+            }
+          });
+        </script>
       </head>
-      <body>Loading...</body>
+      <body>
+        <div style="text-align: center; padding: 50px; font-family: sans-serif;">
+          <p>Loading...</p>
+        </div>
+      </body>
     </html>
   `;
 });
@@ -257,42 +296,114 @@ async function authenticateRequest(ctx, next) {
   await next();
 }
 
-// Billing endpoints for Managed Pricing
+// Billing API endpoints
 router.get('/api/billing/create', authenticateRequest, async (ctx) => {
   try {
     const shop = ctx.state.shop;
-    const appHandle = process.env.SHOPIFY_APP_HANDLE || 'bgn-eur-price-display'; // Your app handle/slug
+    const session = ctx.state.session;
     
-    console.log('=== MANAGED PRICING REDIRECT ===');
+    if (!session?.accessToken) {
+      ctx.status = 401;
+      ctx.body = { error: 'No access token' };
+      return;
+    }
+
+    console.log('=== CREATING BILLING SUBSCRIPTION ===');
     console.log('Shop:', shop);
-    console.log('App handle:', appHandle);
-    
-    // For Managed Pricing, redirect to Shopify-hosted pricing page
-    const confirmationUrl = `https://admin.shopify.com/store/${shop.replace('.myshopify.com', '')}/charges/${appHandle}/pricing_plans`;
-    
+    console.log('Has access token:', !!session.accessToken);
+
+    // Create subscription using GraphQL mutation
+    const mutation = `
+      mutation CreateSubscription($name: String!, $lineItems: [AppSubscriptionLineItemInput!]!, $returnUrl: URL!) {
+        appSubscriptionCreate(
+          name: $name,
+          returnUrl: $returnUrl,
+          lineItems: $lineItems
+        ) {
+          userErrors {
+            field
+            message
+          }
+          confirmationUrl
+          appSubscription {
+            id
+            status
+          }
+        }
+      }
+    `;
+
+    const variables = {
+      name: "BGN/EUR Price Display",
+      returnUrl: `${HOST}/api/billing/callback?shop=${shop}`,
+      lineItems: [{
+        plan: {
+          appRecurringPricingDetails: {
+            price: {
+              amount: 14.99,
+              currencyCode: "USD"
+            },
+            interval: "EVERY_30_DAYS"
+          }
+        }
+      }]
+    };
+
+    const response = await fetch(`https://${shop}/admin/api/2024-10/graphql.json`, {
+      method: 'POST',
+      headers: {
+        'X-Shopify-Access-Token': session.accessToken,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        query: mutation,
+        variables: variables
+      })
+    });
+
+    const result = await response.json();
+    console.log('Billing create response:', JSON.stringify(result, null, 2));
+
+    if (result.data?.appSubscriptionCreate?.userErrors?.length > 0) {
+      console.error('Billing create errors:', result.data.appSubscriptionCreate.userErrors);
+      ctx.status = 400;
+      ctx.body = { 
+        error: 'Failed to create subscription',
+        details: result.data.appSubscriptionCreate.userErrors
+      };
+      return;
+    }
+
+    const confirmationUrl = result.data?.appSubscriptionCreate?.confirmationUrl;
+    if (!confirmationUrl) {
+      ctx.status = 500;
+      ctx.body = { error: 'No confirmation URL received' };
+      return;
+    }
+
     console.log('Confirmation URL:', confirmationUrl);
     ctx.body = { confirmationUrl };
 
   } catch (error) {
-    console.error('Error creating billing redirect:', error);
+    console.error('Error creating billing subscription:', error);
     ctx.status = 500;
     ctx.body = { error: 'Internal server error', message: error.message };
   }
 });
 
-// Billing callback for Managed Pricing
+// Billing callback
 router.get('/api/billing/callback', async (ctx) => {
   try {
-    const { shop } = ctx.query;
+    const { shop, charge_id } = ctx.query;
     
-    console.log('=== MANAGED PRICING CALLBACK ===');
+    console.log('=== BILLING CALLBACK ===');
     console.log('Shop:', shop);
-    console.log('Query params:', ctx.query);
+    console.log('Charge ID:', charge_id);
     
     // Clear cache to force new check
     delete SUBSCRIPTION_CACHE[shop];
     
-    // For Managed Pricing, just redirect back to app
+    // Redirect back to app with success message
     ctx.redirect(`/?shop=${shop}&billing=success`);
   } catch (error) {
     console.error('Billing callback error:', error);
