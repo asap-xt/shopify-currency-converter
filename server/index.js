@@ -530,9 +530,9 @@ router.get('/api/billing/create', authenticateRequest, async (ctx) => {
     ctx.throw(400, errors.map(e => e.message).join('; '));
   }
 
-  // 2) Редиректваме магазина към Shopify billing modal
+  // 2) Връщаме confirmationUrl като JSON за фронтенда
   const confirmationUrl = resp.body.data.appSubscriptionCreate.confirmationUrl;
-  ctx.redirect(confirmationUrl);
+  ctx.body = { confirmationUrl };
 });
 
 // Billing callback endpoint
