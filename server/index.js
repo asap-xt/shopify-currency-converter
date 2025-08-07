@@ -478,13 +478,9 @@ router.get("/billing/confirm", async (ctx) => {
 
 // Billing endpoints
 router.get('/api/billing/create', authenticateRequest, async (ctx) => {
-  const shop = ctx.query.shop;
-  const sessionId = await shopify.session.getCurrentId({
-    rawRequest: ctx.req,
-    rawResponse: ctx.res,
-    isOnline: true
-  });
-  const session = await shopify.config.sessionStorage.loadSession(sessionId);
+  // взимаме сесията от authenticateRequest
+  const session = ctx.state.session;
+  if (!session) throw new Error('No Shopify session in ctx.state');
   const client = new shopify.clients.Graphql({ session });
 
   // 1) Извикваме GraphQL мутацията
@@ -537,14 +533,9 @@ router.get('/api/billing/create', authenticateRequest, async (ctx) => {
 
 // Billing callback endpoint
 router.get('/api/billing/callback', authenticateRequest, async (ctx) => {
-  // Shopify ще върне ?id=<subscriptionId>
   const subscriptionId = ctx.query.id;
-  const sessionId = await shopify.session.getCurrentId({
-    rawRequest: ctx.req,
-    rawResponse: ctx.res,
-    isOnline: true
-  });
-  const session = await shopify.config.sessionStorage.loadSession(sessionId);
+  const session = ctx.state.session;
+  if (!session) throw new Error('No Shopify session in ctx.state');
   const client = new shopify.clients.Graphql({ session });
 
   // Вадим статуса на току-що одобрената подписка
