@@ -515,6 +515,62 @@ router.post('/api/billing/cancel', authenticateRequest, async (ctx) => {
   }
 });
 
+// OAuth routes for initial installation
+router.get('/auth', async (ctx) => {
+  const shop = ctx.query.shop;
+  if (!shop) {
+    ctx.status = 400;
+    ctx.body = 'Missing shop parameter';
+    return;
+  }
+
+  console.log('=== STARTING OAUTH ===');
+  console.log('Shop:', shop);
+
+  try {
+    const authRoute = await shopify.auth.begin({
+      shop,
+      callbackPath: '/auth/callback',
+      isOnline: false, // Use offline tokens for billing
+    });
+    
+    console.log('Redirecting to:', authRoute);
+    ctx.redirect(authRoute);
+  } catch (error) {
+    console.error('OAuth begin error:', error);
+    ctx.status = 500;
+    ctx.body = 'Error starting OAuth flow';
+  }
+});
+
+router.get('/auth/callback', async (ctx) => {
+  try {
+    console.log('=== OAUTH CALLBACK ===');
+    
+    const callbackResponse = await shopify.auth.callback({
+      rawRequest: ctx.req,
+      rawResponse: ctx.res,
+    });
+
+    const { session } = callbackResponse;
+    console.log('OAuth callback successful, shop:', session.shop);
+    console.log('Has access token:', !!session.accessToken);
+
+    // Store the session
+    await memorySessionStorage.storeSession(session);
+
+    // Redirect to billing create
+    const redirectUrl = `/?shop=${session.shop}&host=${ctx.query.host}&billing=needed`;
+    console.log('Redirecting to:', redirectUrl);
+    
+    ctx.redirect(redirectUrl);
+  } catch (error) {
+    console.error('OAuth callback error:', error);
+    ctx.status = 500;
+    ctx.body = 'Error during OAuth callback';
+  }
+});
+
 // Health check
 router.get('/health', async (ctx) => {
   ctx.body = 'OK';
@@ -691,6 +747,7 @@ router.post('/webhooks/app/uninstalled', async (ctx) => {
 router.get('(/)', async (ctx) => {
   console.log('=== MAIN ROUTE ===');
   const shop = ctx.query.shop;
+  const host = ctx.query.host;
 
   if (!shop) {
     ctx.body = "Missing shop parameter. Please install the app through Shopify.";
@@ -698,10 +755,22 @@ router.get('(/)', async (ctx) => {
     return;
   }
 
+  // Check if we have a valid session
+  const sessions = await memorySessionStorage.findSessionsByShop(shop);
+  const hasValidSession = sessions.some(s => s.accessToken && s.accessToken !== 'placeholder');
+
+  if (!hasValidSession) {
+    console.log('No valid session found, starting OAuth flow');
+    ctx.redirect(`/auth?shop=${shop}`);
+    return;
+  }
+
   const { billing } = ctx.query;
   if (billing === 'success') {
     console.log('Billing success callback received');
     delete SUBSCRIPTION_CACHE[shop];
+  } else if (billing === 'needed') {
+    console.log('New installation, billing needed');
   }
 
   ctx.set('Content-Type', 'text/html');
@@ -1063,11 +1132,16 @@ router.get('(/)', async (ctx) => {
     let billingStatus = null;
     let sessionToken = null;
     
-    // Get session token from different sources
-    function getSessionToken() {
+    // Get session token from different sources (async)
+    async function getSessionToken() {
       // Try different methods to get session token
       if (window.shopify?.idToken) {
-        return window.shopify.idToken();
+        try {
+          const token = await window.shopify.idToken();
+          return token;
+        } catch (err) {
+          console.error('Failed to get token from App Bridge:', err);
+        }
       }
       
       // Check URL params
@@ -1115,18 +1189,14 @@ router.get('(/)', async (ctx) => {
     async function checkBillingStatus() {
       console.log('=== CHECK BILLING STATUS ===');
       try {
-        sessionToken = getSessionToken();
+        sessionToken = await getSessionToken();
         
         if (!sessionToken) {
           console.error('No session token available');
           // Try to reload the page to get a fresh token
-          if (window.shopify?.idToken) {
-            window.shopify.idToken().then(token => {
-              sessionToken = token;
-              sessionStorage.setItem('shopify-id-token', token);
-              checkBillingStatusWithToken();
-            });
-          }
+          setTimeout(() => {
+            window.location.reload();
+          }, 2000);
           return;
         }
         
@@ -1190,7 +1260,7 @@ router.get('(/)', async (ctx) => {
     async function startBilling() {
       try {
         if (!sessionToken) {
-          sessionToken = getSessionToken();
+          sessionToken = await getSessionToken();
           if (!sessionToken) {
             alert('Грешка: Не може да се получи session token. Моля презаредете страницата.');
             return;
@@ -1244,33 +1314,39 @@ router.get('(/)', async (ctx) => {
     
     // Check URL parameters for billing status
     const urlParams = new URLSearchParams(window.location.search);
-    if (urlParams.get('billing') === 'success') {
+    const billing = urlParams.get('billing');
+    
+    if (billing === 'success') {
       alert('🎉 Успешно активирахте плана! Вече можете да използвате всички функции.');
       // Remove the parameter from URL
-      window.history.replaceState({}, document.title, window.location.pathname + '?shop=${shop}');
-    } else if (urlParams.get('billing') === 'error') {
+      const newUrl = new URL(window.location);
+      newUrl.searchParams.delete('billing');
+      window.history.replaceState({}, document.title, newUrl.toString());
+    } else if (billing === 'error') {
       alert('❌ Възникна грешка при активиране на плана. Моля опитайте отново.');
+    } else if (billing === 'needed') {
+      // New installation - show billing prompt immediately
+      console.log('New installation detected, will check billing status');
     }
     
     // Initialize App Bridge and load data
-    document.addEventListener('DOMContentLoaded', function() {
+    document.addEventListener('DOMContentLoaded', async function() {
       console.log('DOM loaded, initializing...');
       
-      // Try to get App Bridge token
-      if (window.shopify?.idToken) {
-        window.shopify.idToken().then(token => {
-          console.log('Got App Bridge token');
-          sessionToken = token;
-          sessionStorage.setItem('shopify-id-token', token);
+      // Wait a bit for App Bridge to initialize
+      setTimeout(async () => {
+        try {
+          sessionToken = await getSessionToken();
+          if (sessionToken) {
+            console.log('Got session token');
+            sessionStorage.setItem('shopify-id-token', sessionToken);
+          }
           loadAppData();
-        }).catch(err => {
-          console.error('Failed to get App Bridge token:', err);
+        } catch (err) {
+          console.error('Error getting initial token:', err);
           loadAppData();
-        });
-      } else {
-        console.log('App Bridge not available, loading anyway');
-        setTimeout(loadAppData, 1000);
-      }
+        }
+      }, 1000);
     });
   </script>
 </body>
