@@ -8,14 +8,6 @@ import crypto from 'crypto';
 import getRawBody from 'raw-body';
 import { shopifyApi, LATEST_API_VERSION, Session } from '@shopify/shopify-api';
 
-// Environment check
-console.log('=== Environment Variables Check ===');
-console.log('SHOPIFY_API_KEY:', process.env.SHOPIFY_API_KEY ? 'SET' : 'MISSING');
-console.log('SHOPIFY_API_SECRET:', process.env.SHOPIFY_API_SECRET ? 'SET' : 'MISSING');
-console.log('SCOPES:', process.env.SCOPES);
-console.log('HOST:', process.env.HOST);
-console.log('====================================');
-
 // Session storage
 const memorySessionStorage = {
   storage: new Map(),
@@ -54,7 +46,7 @@ const {
 
 // Validation
 if (!SHOPIFY_API_KEY || !SHOPIFY_API_SECRET || !SCOPES || !HOST) {
-  console.error('FATAL: Missing required environment variables!');
+  console.error('Missing required environment variables!');
   process.exit(1);
 }
 
@@ -68,11 +60,9 @@ const shopify = shopifyApi({
   isEmbeddedApp: true,
   sessionStorage: memorySessionStorage,
   auth: {
-    useOnlineTokens: false, // Changed to false for billing
+    useOnlineTokens: false, // Use offline tokens for billing
   },
   billing: {
-    // This is required for Shopify Billing API
-    // It tells Shopify that this app uses billing
     required: false
   }
 });
@@ -153,33 +143,23 @@ router.get('/session-token-bounce', async (ctx) => {
         <script src="https://cdn.shopify.com/shopifycloud/app-bridge.js"></script>
         <script>
           document.addEventListener('DOMContentLoaded', async function() {
-            console.log('Session token bounce page loaded');
-            
-            // Get the redirect URL from query params
             const params = new URLSearchParams(window.location.search);
             const redirectUrl = params.get('shopify-reload');
             
             if (redirectUrl) {
-              // Try to get session token
               if (window.shopify?.idToken) {
                 try {
                   const token = await window.shopify.idToken();
-                  console.log('Got session token, redirecting...');
-                  
-                  // Add token to URL and redirect
                   const url = new URL(redirectUrl, window.location.origin);
                   url.searchParams.set('id_token', token);
                   window.location.href = url.toString();
                 } catch (err) {
-                  console.error('Failed to get token:', err);
                   window.location.href = redirectUrl;
                 }
               } else {
-                console.log('No App Bridge available, redirecting anyway...');
                 window.location.href = redirectUrl;
               }
             } else {
-              // No redirect URL, go to main app
               window.location.href = '/?shop=${shop || ''}';
             }
           });
@@ -196,8 +176,6 @@ router.get('/session-token-bounce', async (ctx) => {
 
 // Authentication middleware using Token Exchange
 async function authenticateRequest(ctx, next) {
-  console.log('=== AUTHENTICATING REQUEST ===');
-
   let encodedSessionToken = null;
   let decodedSessionToken = null;
 
@@ -205,7 +183,6 @@ async function authenticateRequest(ctx, next) {
     encodedSessionToken = getSessionTokenHeader(ctx) || getSessionTokenFromUrlParam(ctx);
 
     if (!encodedSessionToken) {
-      console.log('No session token found');
       const isDocumentRequest = !ctx.headers['authorization'];
       if (isDocumentRequest) {
         redirectToSessionTokenBouncePage(ctx);
@@ -219,7 +196,6 @@ async function authenticateRequest(ctx, next) {
     }
 
     decodedSessionToken = await shopify.session.decodeSessionToken(encodedSessionToken);
-    console.log('Session token decoded:', { dest: decodedSessionToken.dest, iss: decodedSessionToken.iss });
 
   } catch (e) {
     console.error('Invalid session token:', e.message);
@@ -239,10 +215,8 @@ async function authenticateRequest(ctx, next) {
   const dest = new URL(decodedSessionToken.dest);
   let shop = dest.hostname;
 
-  // Fallback: use shop from query parameter if available
   const queryShop = ctx.query.shop;
   if (queryShop && queryShop !== shop) {
-    console.log(`Shop mismatch: session token shop (${shop}) vs query shop (${queryShop})`);
     shop = queryShop;
   }
 
@@ -250,15 +224,11 @@ async function authenticateRequest(ctx, next) {
   let session = sessions.find(s => !s.isOnline);
 
   if (!session || !session.accessToken || session.accessToken === 'placeholder') {
-    console.log('No valid session with access token, performing token exchange...');
-
     try {
       const tokenExchangeResult = await shopify.auth.tokenExchange({
         shop: shop,
         sessionToken: encodedSessionToken,
       });
-
-      console.log('Token exchange successful');
       
       const accessToken = tokenExchangeResult.accessToken || tokenExchangeResult.session?.accessToken;
       
@@ -277,7 +247,7 @@ async function authenticateRequest(ctx, next) {
         isOnline: false,
         accessToken: accessToken,
         scope: tokenExchangeResult.session?.scope || tokenExchangeResult.scope || SCOPES,
-        expires: null // Offline tokens don't expire
+        expires: null
       });
 
       await memorySessionStorage.storeSession(session);
@@ -296,7 +266,7 @@ async function authenticateRequest(ctx, next) {
   await next();
 }
 
-// Billing API endpoints - with fallback to Managed Pricing
+// Billing API endpoints
 router.get('/api/billing/create', authenticateRequest, async (ctx) => {
   try {
     const shop = ctx.state.shop;
@@ -308,11 +278,7 @@ router.get('/api/billing/create', authenticateRequest, async (ctx) => {
       return;
     }
 
-    console.log('=== CREATING BILLING SUBSCRIPTION ===');
-    console.log('Shop:', shop);
-    console.log('Has access token:', !!session.accessToken);
-
-    // First try Billing API
+    // Create subscription using GraphQL mutation
     const mutation = `
       mutation CreateSubscription($name: String!, $lineItems: [AppSubscriptionLineItemInput!]!, $returnUrl: URL!) {
         appSubscriptionCreate(
@@ -362,7 +328,6 @@ router.get('/api/billing/create', authenticateRequest, async (ctx) => {
     });
 
     const result = await response.json();
-    console.log('Billing create response:', JSON.stringify(result, null, 2));
 
     // Check if it's a Managed Pricing error
     const errors = result.data?.appSubscriptionCreate?.userErrors || [];
@@ -371,16 +336,10 @@ router.get('/api/billing/create', authenticateRequest, async (ctx) => {
     );
 
     if (isManagedPricingError) {
-      console.log('App is configured as Managed Pricing, using fallback...');
-      
       // Fallback to Managed Pricing approach
       const appHandle = process.env.SHOPIFY_APP_HANDLE || 'bgn-eur-price-display';
       const shopDomain = shop.replace('.myshopify.com', '');
       const confirmationUrl = `https://admin.shopify.com/store/${shopDomain}/charges/${appHandle}/pricing_plans`;
-      
-      console.log('App handle:', appHandle);
-      console.log('Shop domain:', shopDomain);
-      console.log('Managed Pricing URL:', confirmationUrl);
       
       ctx.body = { 
         confirmationUrl,
@@ -406,7 +365,6 @@ router.get('/api/billing/create', authenticateRequest, async (ctx) => {
       return;
     }
 
-    console.log('Confirmation URL:', confirmationUrl);
     ctx.body = { confirmationUrl };
 
   } catch (error) {
@@ -420,10 +378,6 @@ router.get('/api/billing/create', authenticateRequest, async (ctx) => {
 router.get('/api/billing/callback', async (ctx) => {
   try {
     const { shop, charge_id } = ctx.query;
-    
-    console.log('=== BILLING CALLBACK ===');
-    console.log('Shop:', shop);
-    console.log('Charge ID:', charge_id);
     
     // Clear cache to force new check
     delete SUBSCRIPTION_CACHE[shop];
@@ -446,19 +400,14 @@ router.get('/api/billing/status', authenticateRequest, async (ctx) => {
     ctx.body = { error: 'Missing shop or access token' };
     return;
   }
-
-  console.log('=== CHECKING BILLING STATUS ===');
-  console.log('Shop:', shop);
   
   // Force fresh check if coming from billing
   if (ctx.query.billing === 'success' || ctx.query.charge_id || ctx.query.return_status === 'success') {
-    console.log('Coming from billing, skipping cache');
     // Skip cache
   } else {
     // Check cache
     const cached = SUBSCRIPTION_CACHE[shop];
     if (cached && cached.timestamp > Date.now() - CACHE_DURATION) {
-      console.log('Returning cached billing status');
       ctx.body = cached.data;
       return;
     }
@@ -490,7 +439,6 @@ router.get('/api/billing/status', authenticateRequest, async (ctx) => {
     });
 
     const result = await response.json();
-    console.log('Billing status response:', JSON.stringify(result, null, 2));
 
     if (result.errors) {
       console.error('GraphQL errors:', result.errors);
@@ -505,7 +453,7 @@ router.get('/api/billing/status', authenticateRequest, async (ctx) => {
 
     const subscriptions = result.data?.currentAppInstallation?.activeSubscriptions || [];
     
-    // Filter only active subscriptions (no test filtering needed in production)
+    // Filter only active subscriptions
     const activeSubscriptions = subscriptions.filter(sub => sub.status === 'ACTIVE');
     
     const hasActiveSubscription = activeSubscriptions.length > 0;
@@ -514,8 +462,7 @@ router.get('/api/billing/status', authenticateRequest, async (ctx) => {
       hasActiveSubscription: hasActiveSubscription,
       shop: shop,
       subscriptions: subscriptions,
-      activeCount: activeSubscriptions.length,
-      message: 'Real-time billing check from Shopify API'
+      activeCount: activeSubscriptions.length
     };
 
     // Cache the result
@@ -530,8 +477,7 @@ router.get('/api/billing/status', authenticateRequest, async (ctx) => {
     ctx.body = {
       hasActiveSubscription: false,
       shop: shop,
-      error: error.message,
-      message: 'Error checking billing - defaulting to false'
+      error: error.message
     };
   }
 });
@@ -592,133 +538,6 @@ router.post('/api/billing/cancel', authenticateRequest, async (ctx) => {
   }
 });
 
-// OAuth routes for initial installation (handled by Shopify)
-router.get('/auth', async (ctx) => {
-  const shop = ctx.query.shop;
-  if (!shop) {
-    ctx.status = 400;
-    ctx.body = 'Missing shop parameter';
-    return;
-  }
-
-  console.log('=== OAUTH ROUTE HIT ===');
-  console.log('Shop:', shop);
-  
-  // For embedded apps, Shopify handles the initial OAuth flow
-  // Just redirect to the app
-  ctx.redirect(`/?shop=${shop}&host=${ctx.query.host}`);
-});
-
-router.get('/auth/callback', async (ctx) => {
-  try {
-    console.log('=== OAUTH CALLBACK ===');
-    
-    // For embedded apps with Token Exchange, 
-    // Shopify handles the OAuth flow automatically
-    // This callback is mainly for redirect URLs
-    
-    const { shop, host } = ctx.query;
-    
-    // Redirect to main app page
-    const redirectUrl = `/?shop=${shop}&host=${host}`;
-    console.log('Redirecting to:', redirectUrl);
-    
-    ctx.redirect(redirectUrl);
-  } catch (error) {
-    console.error('OAuth callback error:', error);
-    ctx.status = 500;
-    ctx.body = 'Error during OAuth callback';
-  }
-});
-
-// Debug billing configuration - enhanced
-router.get('/api/billing/debug', authenticateRequest, async (ctx) => {
-  try {
-    const shop = ctx.state.shop;
-    const session = ctx.state.session;
-    
-    // Check current app installation and capabilities
-    const query = `{
-      currentAppInstallation {
-        id
-        app {
-          id
-          title
-          handle
-          developerName
-          requestedAccessScopes {
-            handle
-          }
-        }
-        activeSubscriptions {
-          id
-          status
-          name
-          test
-          lineItems {
-            id
-            plan {
-              pricingDetails {
-                ... on AppRecurringPricing {
-                  price {
-                    amount
-                    currencyCode
-                  }
-                  interval
-                }
-              }
-            }
-          }
-        }
-        allSubscriptions(first: 5) {
-          edges {
-            node {
-              id
-              status
-              name
-              test
-              createdAt
-            }
-          }
-        }
-      }
-    }`;
-
-    const response = await fetch(`https://${shop}/admin/api/2024-10/graphql.json`, {
-      method: 'POST',
-      headers: {
-        'X-Shopify-Access-Token': session.accessToken,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ query })
-    });
-
-    const result = await response.json();
-    
-    ctx.body = {
-      shop: shop,
-      hasAccessToken: !!session.accessToken,
-      sessionType: session.isOnline ? 'online' : 'offline',
-      currentScopes: session.scope,
-      requiredScopes: 'write_own_subscription_contracts,read_customer_payment_methods',
-      missingBillingScopes: !session.scope?.includes('write_own_subscription_contracts'),
-      configuredScopes: SCOPES,
-      apiVersion: LATEST_API_VERSION,
-      appInstallation: result.data?.currentAppInstallation,
-      graphqlErrors: result.errors,
-      debugInfo: {
-        nodeEnv: process.env.NODE_ENV,
-        appHandle: process.env.SHOPIFY_APP_HANDLE,
-        host: HOST
-      }
-    };
-  } catch (error) {
-    console.error('Debug error:', error);
-    ctx.status = 500;
-    ctx.body = { error: error.message };
-  }
-});
-
 // Health check
 router.get('/health', async (ctx) => {
   ctx.body = 'OK';
@@ -744,14 +563,31 @@ router.get('/api/shop', async (ctx) => {
   };
 });
 
-// Test API endpoint
-router.get('/api/test', authenticateRequest, async (ctx) => {
-  ctx.body = {
-    message: 'Success! Session is valid',
-    shop: ctx.state.shop,
-    hasAccessToken: !!ctx.state.session.accessToken,
-    scope: ctx.state.session.scope
-  };
+// OAuth routes for initial installation (handled by Shopify)
+router.get('/auth', async (ctx) => {
+  const shop = ctx.query.shop;
+  if (!shop) {
+    ctx.status = 400;
+    ctx.body = 'Missing shop parameter';
+    return;
+  }
+  
+  // For embedded apps, Shopify handles the initial OAuth flow
+  ctx.redirect(`/?shop=${shop}&host=${ctx.query.host}`);
+});
+
+router.get('/auth/callback', async (ctx) => {
+  try {
+    const { shop, host } = ctx.query;
+    
+    // Redirect to main app page
+    const redirectUrl = `/?shop=${shop}&host=${host}`;
+    ctx.redirect(redirectUrl);
+  } catch (error) {
+    console.error('OAuth callback error:', error);
+    ctx.status = 500;
+    ctx.body = 'Error during OAuth callback';
+  }
 });
 
 // Mandatory compliance webhooks
@@ -777,7 +613,6 @@ router.post('/webhooks/customers/data_request', async (ctx) => {
       return;
     }
 
-    console.log('Customer data request received');
     ctx.status = 200;
     ctx.body = { message: 'No customer data stored' };
   } catch (error) {
@@ -809,7 +644,6 @@ router.post('/webhooks/customers/redact', async (ctx) => {
       return;
     }
 
-    console.log('Customer redact request received');
     ctx.status = 200;
     ctx.body = { message: 'No customer data to redact' };
   } catch (error) {
@@ -841,7 +675,6 @@ router.post('/webhooks/shop/redact', async (ctx) => {
       return;
     }
 
-    console.log('Shop redact request received');
     ctx.status = 200;
     ctx.body = { message: 'No shop data to redact' };
   } catch (error) {
@@ -893,7 +726,6 @@ router.post('/webhooks/app/uninstalled', async (ctx) => {
 
 // Main app route
 router.get('(/)', async (ctx) => {
-  console.log('=== MAIN ROUTE ===');
   const shop = ctx.query.shop;
   const host = ctx.query.host;
 
@@ -906,13 +738,11 @@ router.get('(/)', async (ctx) => {
   // Check if coming back from billing
   const { billing, charge_id } = ctx.query;
   if (billing === 'success' || charge_id) {
-    console.log('Billing success callback received, clearing cache');
     delete SUBSCRIPTION_CACHE[shop];
   }
   
   // Also check for Shopify's standard return parameters
   if (ctx.query.return_status === 'success') {
-    console.log('Shopify return status success, clearing cache');
     delete SUBSCRIPTION_CACHE[shop];
   }
 
@@ -1304,7 +1134,6 @@ router.get('(/)', async (ctx) => {
     }
     
     async function loadAppData() {
-      console.log('loadAppData called');
       try {
         // First, ensure we have a session token
         if (!sessionToken) {
@@ -1317,13 +1146,10 @@ router.get('(/)', async (ctx) => {
         }
         
         const url = '/api/shop?shop=${shop}';
-        console.log('Fetching:', url);
         const response = await fetch(url);
-        console.log('Response status:', response.status);
         
         if (response.ok) {
           const data = await response.json();
-          console.log('Shop data loaded:', data);
           document.getElementById('loading').style.display = 'none';
           document.getElementById('status-badge').style.display = 'inline-block';
           
@@ -1340,13 +1166,11 @@ router.get('(/)', async (ctx) => {
     }
     
     async function checkBillingStatus() {
-      console.log('=== CHECK BILLING STATUS ===');
       try {
         sessionToken = await getSessionToken();
         
         if (!sessionToken) {
           console.error('No session token available');
-          // Try to reload the page to get a fresh token
           setTimeout(() => {
             window.location.reload();
           }, 2000);
@@ -1361,7 +1185,6 @@ router.get('(/)', async (ctx) => {
     
     async function checkBillingStatusWithToken() {
       const url = '/api/billing/status?shop=${shop}';
-      console.log('Fetching billing status:', url);
       
       const response = await fetch(url, {
         headers: {
@@ -1373,14 +1196,9 @@ router.get('(/)', async (ctx) => {
       if (response.ok) {
         const data = await response.json();
         billingStatus = data.hasActiveSubscription;
-        console.log('Billing status:', billingStatus);
-        console.log('Full response:', data);
         
         if (!billingStatus) {
-          console.log('No active subscription - showing billing prompt');
           showBillingPrompt();
-        } else {
-          console.log('Active subscription found');
         }
       } else {
         console.error('Failed to check billing status');
@@ -1388,7 +1206,6 @@ router.get('(/)', async (ctx) => {
     }
     
     function showBillingPrompt() {
-      console.log('Showing billing prompt');
       const billingPromptHtml = \`
         <div class="billing-prompt">
           <h3>🎁 Започнете 5-дневен безплатен пробен период</h3>
@@ -1420,8 +1237,6 @@ router.get('(/)', async (ctx) => {
           }
         }
         
-        console.log('Starting billing with token:', sessionToken.substring(0, 20) + '...');
-        
         const response = await fetch('/api/billing/create?shop=${shop}', {
           headers: {
             'Authorization': 'Bearer ' + sessionToken,
@@ -1437,13 +1252,8 @@ router.get('(/)', async (ctx) => {
         }
         
         const data = await response.json();
-        console.log('Billing response:', data);
-        console.log('Confirmation URL:', data.confirmationUrl);
-        console.log('Billing type:', data.type);
         
         if (data.confirmationUrl) {
-          console.log('Redirecting to:', data.confirmationUrl);
-          
           // For managed pricing, we need to redirect differently
           if (data.type === 'managed_pricing') {
             // Open in parent window/tab
@@ -1482,8 +1292,6 @@ router.get('(/)', async (ctx) => {
     const returnStatus = urlParams.get('return_status');
     
     if (billing === 'success' || chargeId || returnStatus === 'success') {
-      console.log('Billing success detected, forcing cache refresh');
-      
       // Force refresh billing status
       setTimeout(async () => {
         billingStatus = null; // Clear local status
@@ -1502,19 +1310,15 @@ router.get('(/)', async (ctx) => {
       alert('❌ Възникна грешка при активиране на плана. Моля опитайте отново.');
     } else if (billing === 'needed') {
       // New installation - show billing prompt immediately
-      console.log('New installation detected, will check billing status');
     }
     
     // Initialize App Bridge and load data
     document.addEventListener('DOMContentLoaded', async function() {
-      console.log('DOM loaded, initializing...');
-      
       // Wait a bit for App Bridge to initialize
       setTimeout(async () => {
         try {
           sessionToken = await getSessionToken();
           if (sessionToken) {
-            console.log('Got session token');
             sessionStorage.setItem('shopify-id-token', sessionToken);
           }
           loadAppData();
@@ -1530,33 +1334,6 @@ router.get('(/)', async (ctx) => {
   `;
 });
 
-// Debug route
-router.get('/debug', async (ctx) => {
-  const allSessions = [];
-  for (const [id, session] of memorySessionStorage.storage) {
-    allSessions.push({
-      id: id,
-      shop: session.shop,
-      isOnline: session.isOnline,
-      hasToken: !!session.accessToken && session.accessToken !== 'placeholder',
-      tokenLength: session.accessToken?.length
-    });
-  }
-
-  ctx.body = {
-    message: 'Debug info',
-    timestamp: new Date().toISOString(),
-    environment: {
-      nodeVersion: process.version,
-      hasShopifyKey: !!SHOPIFY_API_KEY,
-      scopes: SCOPES,
-      host: HOST
-    },
-    sessions: allSessions,
-    queryShop: ctx.query.shop
-  };
-});
-
 app.use(router.routes());
 app.use(router.allowedMethods());
 
@@ -1566,8 +1343,8 @@ app.listen(PORT, '0.0.0.0', function () {
   console.log(`✓ Server listening on port ${PORT}`);
   console.log(`✓ Using Token Exchange authentication`);
   console.log(`✓ App URL: ${HOST}`);
-  console.log(`✓ Billing API configured`);
+  console.log(`✓ Billing configured`);
 }).on('error', (err) => {
-  console.error('FATAL: Server failed to start:', err);
+  console.error('Server failed to start:', err);
   process.exit(1);
 });
