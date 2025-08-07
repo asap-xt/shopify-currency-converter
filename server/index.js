@@ -478,56 +478,14 @@ router.get("/billing/confirm", async (ctx) => {
 
 // Billing endpoints
 router.get('/api/billing/create', authenticateRequest, async (ctx) => {
-  // взимаме сесията от authenticateRequest
-  const session = ctx.state.session;
-  if (!session) throw new Error('No Shopify session in ctx.state');
-  const client = new shopify.clients.Graphql({ session });
+  // При Managed Pricing redirect-ваме към Shopify-hosted планова страница
+  const shop = ctx.state.shop;                     // зададено в authenticateRequest
+  const appHandle = process.env.SHOPIFY_APP_HANDLE;     // slug на приложението в Partner Dashboard
 
-  // 1) Извикваме GraphQL мутацията
-  const MUTATION = `
-    mutation appSubscriptionCreate(
-      $name: String!,
-      $returnUrl: URL!,
-      $trialDays: Int!,
-      $test: Boolean!
-    ) {
-      appSubscriptionCreate(
-        name: $name,
-        returnUrl: $returnUrl,
-        trialDays: $trialDays,
-        lineItems: [
-          {
-            plan: {
-              appRecurringPricingDetails: {
-                price: { amount: 14.99, currencyCode: USD },
-                interval: EVERY_30_DAYS
-              }
-            }
-          }
-        ],
-        test: $test
-      ) {
-        confirmationUrl
-        userErrors { field message }
-      }
-    }
-  `;
-  const vars = {
-    name: "Basic Plan",
-    returnUrl: `${HOST}/api/billing/callback`,
-    trialDays: 5,
-    test: process.env.NODE_ENV !== 'production'
-  };
+  // URL за избор на план (виден само в admin iframe)
+  const confirmationUrl =
+    `https://admin.shopify.com/store/${shop}/charges/${appHandle}/pricing_plans`;
 
-  const resp = await client.query({ data: { query: MUTATION, variables: vars } });
-  const errors = resp.body.data.appSubscriptionCreate.userErrors;
-  if (errors.length) {
-    console.error('Billing create errors:', errors);
-    ctx.throw(400, errors.map(e => e.message).join('; '));
-  }
-
-  // 2) Връщаме confirmationUrl като JSON за фронтенда
-  const confirmationUrl = resp.body.data.appSubscriptionCreate.confirmationUrl;
   ctx.body = { confirmationUrl };
 });
 
