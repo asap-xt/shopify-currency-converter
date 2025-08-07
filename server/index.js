@@ -6,7 +6,7 @@ import koaSession from 'koa-session';
 import Router from 'koa-router';
 import crypto from 'crypto';
 import getRawBody from 'raw-body';
-import { shopifyApi, LATEST_API_VERSION, Session, GraphqlClient } from '@shopify/shopify-api';
+import { shopifyApi, LATEST_API_VERSION, Session } from '@shopify/shopify-api';
 
 // Environment check
 console.log('=== Environment Variables Check ===');
@@ -15,15 +15,6 @@ console.log('SHOPIFY_API_SECRET:', process.env.SHOPIFY_API_SECRET ? 'SET' : 'MIS
 console.log('SCOPES:', process.env.SCOPES);
 console.log('HOST:', process.env.HOST);
 console.log('====================================');
-
-// Debug environment variables
-console.log('=== DEBUG ENV VARS ===');
-console.log('SHOPIFY_API_KEY length:', process.env.SHOPIFY_API_KEY?.length);
-console.log('SHOPIFY_API_SECRET length:', process.env.SHOPIFY_API_SECRET?.length);
-console.log('SCOPES length:', process.env.SCOPES?.length);
-console.log('HOST length:', process.env.HOST?.length);
-console.log('SCOPES value:', process.env.SCOPES);
-console.log('========================');
 
 // Session storage
 const memorySessionStorage = {
@@ -62,21 +53,8 @@ const {
 } = process.env;
 
 // Validation
-console.log('=== VALIDATION CHECK ===');
-console.log('SHOPIFY_API_KEY exists:', !!SHOPIFY_API_KEY);
-console.log('SHOPIFY_API_SECRET exists:', !!SHOPIFY_API_SECRET);
-console.log('SCOPES exists:', !!SCOPES);
-console.log('HOST exists:', !!HOST);
-console.log('========================');
-
 if (!SHOPIFY_API_KEY || !SHOPIFY_API_SECRET || !SCOPES || !HOST) {
   console.error('FATAL: Missing required environment variables!');
-  console.error('Missing:', {
-    SHOPIFY_API_KEY: !SHOPIFY_API_KEY,
-    SHOPIFY_API_SECRET: !SHOPIFY_API_SECRET,
-    SCOPES: !SCOPES,
-    HOST: !HOST
-  });
   process.exit(1);
 }
 
@@ -97,7 +75,7 @@ const shopify = shopifyApi({
 const app = new Koa();
 app.keys = [SHOPIFY_API_SECRET];
 
-// Raw body middleware за webhooks - ВАЖНО: Трябва да е ПРЕДИ другите middleware
+// Raw body middleware for webhooks
 app.use(async (ctx, next) => {
   if (ctx.path.startsWith('/webhooks/')) {
     ctx.request.rawBody = await getRawBody(ctx.req, {
@@ -137,6 +115,441 @@ app.use(koaSession({ sameSite: 'none', secure: true }, app));
 
 const router = new Router();
 
+// Subscription cache
+let SUBSCRIPTION_CACHE = {};
+const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes
+
+// Helper functions for Token Exchange
+function getSessionTokenHeader(ctx) {
+  return ctx.headers['authorization']?.replace('Bearer ', '');
+}
+
+function getSessionTokenFromUrlParam(ctx) {
+  return ctx.query.id_token;
+}
+
+function redirectToSessionTokenBouncePage(ctx) {
+  const searchParams = new URLSearchParams(ctx.query);
+  searchParams.delete('id_token');
+  searchParams.append('shopify-reload', `${ctx.path}?${searchParams.toString()}`);
+  ctx.redirect(`/session-token-bounce?${searchParams.toString()}`);
+}
+
+// Session token bounce page
+router.get('/session-token-bounce', async (ctx) => {
+  ctx.set('Content-Type', 'text/html');
+  ctx.body = `
+    <!DOCTYPE html>
+    <html>
+      <head>
+        <meta name="shopify-api-key" content="${SHOPIFY_API_KEY}" />
+        <script src="https://cdn.shopify.com/shopifycloud/app-bridge.js"></script>
+      </head>
+      <body>Loading...</body>
+    </html>
+  `;
+});
+
+// Authentication middleware using Token Exchange
+async function authenticateRequest(ctx, next) {
+  console.log('=== AUTHENTICATING REQUEST ===');
+
+  let encodedSessionToken = null;
+  let decodedSessionToken = null;
+
+  try {
+    encodedSessionToken = getSessionTokenHeader(ctx) || getSessionTokenFromUrlParam(ctx);
+
+    if (!encodedSessionToken) {
+      console.log('No session token found');
+      const isDocumentRequest = !ctx.headers['authorization'];
+      if (isDocumentRequest) {
+        redirectToSessionTokenBouncePage(ctx);
+        return;
+      }
+
+      ctx.status = 401;
+      ctx.set('X-Shopify-Retry-Invalid-Session-Request', '1');
+      ctx.body = 'Unauthorized';
+      return;
+    }
+
+    decodedSessionToken = await shopify.session.decodeSessionToken(encodedSessionToken);
+    console.log('Session token decoded:', { dest: decodedSessionToken.dest, iss: decodedSessionToken.iss });
+
+  } catch (e) {
+    console.error('Invalid session token:', e.message);
+
+    const isDocumentRequest = !ctx.headers['authorization'];
+    if (isDocumentRequest) {
+      redirectToSessionTokenBouncePage(ctx);
+      return;
+    }
+
+    ctx.status = 401;
+    ctx.set('X-Shopify-Retry-Invalid-Session-Request', '1');
+    ctx.body = 'Unauthorized';
+    return;
+  }
+
+  const dest = new URL(decodedSessionToken.dest);
+  let shop = dest.hostname;
+
+  // Fallback: use shop from query parameter if available
+  const queryShop = ctx.query.shop;
+  if (queryShop && queryShop !== shop) {
+    console.log(`Shop mismatch: session token shop (${shop}) vs query shop (${queryShop})`);
+    shop = queryShop;
+  }
+
+  const sessions = await memorySessionStorage.findSessionsByShop(shop);
+  let session = sessions.find(s => !s.isOnline);
+
+  if (!session || !session.accessToken || session.accessToken === 'placeholder') {
+    console.log('No valid session with access token, performing token exchange...');
+
+    try {
+      const tokenExchangeResult = await shopify.auth.tokenExchange({
+        shop: shop,
+        sessionToken: encodedSessionToken,
+      });
+
+      console.log('Token exchange successful');
+      
+      const accessToken = tokenExchangeResult.accessToken || tokenExchangeResult.session?.accessToken;
+      
+      if (!accessToken) {
+        console.error('Token exchange succeeded but no access token received');
+        ctx.status = 500;
+        ctx.body = 'Token exchange failed - no access token';
+        return;
+      }
+
+      const sessionId = `offline_${shop}`;
+      session = new Session({
+        id: sessionId,
+        shop: shop,
+        state: 'active',
+        isOnline: false,
+        accessToken: accessToken,
+        scope: tokenExchangeResult.session?.scope || tokenExchangeResult.scope,
+      });
+
+      await memorySessionStorage.storeSession(session);
+
+    } catch (error) {
+      console.error('Token exchange failed:', error);
+      ctx.status = 500;
+      ctx.body = 'Token exchange failed';
+      return;
+    }
+  }
+
+  ctx.state.shop = shop;
+  ctx.state.session = session;
+
+  await next();
+}
+
+// Billing API endpoints
+router.get('/api/billing/create', authenticateRequest, async (ctx) => {
+  try {
+    const shop = ctx.state.shop;
+    const session = ctx.state.session;
+    
+    if (!session?.accessToken) {
+      ctx.status = 401;
+      ctx.body = { error: 'No access token' };
+      return;
+    }
+
+    console.log('=== CREATING BILLING SUBSCRIPTION ===');
+    console.log('Shop:', shop);
+    console.log('Has access token:', !!session.accessToken);
+
+    // Create subscription using GraphQL mutation
+    const mutation = `
+      mutation CreateSubscription($name: String!, $lineItems: [AppSubscriptionLineItemInput!]!) {
+        appSubscriptionCreate(
+          name: $name,
+          returnUrl: "${HOST}/api/billing/callback?shop=${shop}",
+          lineItems: $lineItems
+        ) {
+          userErrors {
+            field
+            message
+          }
+          confirmationUrl
+          appSubscription {
+            id
+            status
+          }
+        }
+      }
+    `;
+
+    const variables = {
+      name: "BGN/EUR Price Display",
+      lineItems: [{
+        plan: {
+          appRecurringPricingDetails: {
+            price: {
+              amount: 14.99,
+              currencyCode: "USD"
+            },
+            interval: "EVERY_30_DAYS"
+          }
+        }
+      }]
+    };
+
+    const response = await fetch(`https://${shop}/admin/api/2024-10/graphql.json`, {
+      method: 'POST',
+      headers: {
+        'X-Shopify-Access-Token': session.accessToken,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        query: mutation,
+        variables: variables
+      })
+    });
+
+    const result = await response.json();
+    console.log('Billing create response:', JSON.stringify(result, null, 2));
+
+    if (result.data?.appSubscriptionCreate?.userErrors?.length > 0) {
+      console.error('Billing create errors:', result.data.appSubscriptionCreate.userErrors);
+      ctx.status = 400;
+      ctx.body = { 
+        error: 'Failed to create subscription',
+        details: result.data.appSubscriptionCreate.userErrors
+      };
+      return;
+    }
+
+    const confirmationUrl = result.data?.appSubscriptionCreate?.confirmationUrl;
+    if (!confirmationUrl) {
+      ctx.status = 500;
+      ctx.body = { error: 'No confirmation URL received' };
+      return;
+    }
+
+    console.log('Confirmation URL:', confirmationUrl);
+    ctx.body = { confirmationUrl };
+
+  } catch (error) {
+    console.error('Error creating billing subscription:', error);
+    ctx.status = 500;
+    ctx.body = { error: 'Internal server error', message: error.message };
+  }
+});
+
+// Billing callback
+router.get('/api/billing/callback', async (ctx) => {
+  try {
+    const { shop, charge_id } = ctx.query;
+    
+    console.log('=== BILLING CALLBACK ===');
+    console.log('Shop:', shop);
+    console.log('Charge ID:', charge_id);
+    
+    // Clear cache to force new check
+    delete SUBSCRIPTION_CACHE[shop];
+    
+    // Redirect back to app with success message
+    ctx.redirect(`/?shop=${shop}&billing=success`);
+  } catch (error) {
+    console.error('Billing callback error:', error);
+    ctx.redirect(`/?shop=${ctx.query.shop}&billing=error`);
+  }
+});
+
+// Check billing status
+router.get('/api/billing/status', authenticateRequest, async (ctx) => {
+  const shop = ctx.state.shop;
+  const session = ctx.state.session;
+
+  if (!shop || !session?.accessToken) {
+    ctx.status = 400;
+    ctx.body = { error: 'Missing shop or access token' };
+    return;
+  }
+
+  console.log('=== CHECKING BILLING STATUS ===');
+  console.log('Shop:', shop);
+  
+  // Check cache
+  const cached = SUBSCRIPTION_CACHE[shop];
+  if (cached && cached.timestamp > Date.now() - CACHE_DURATION) {
+    console.log('Returning cached billing status');
+    ctx.body = cached.data;
+    return;
+  }
+  
+  try {
+    // Query active subscriptions
+    const query = `{
+      currentAppInstallation {
+        activeSubscriptions {
+          id
+          status
+          name
+          test
+          trialDays
+          createdAt
+          currentPeriodEnd
+        }
+      }
+    }`;
+
+    const response = await fetch(`https://${shop}/admin/api/2024-10/graphql.json`, {
+      method: 'POST',
+      headers: {
+        'X-Shopify-Access-Token': session.accessToken,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ query })
+    });
+
+    const result = await response.json();
+    console.log('Billing status response:', JSON.stringify(result, null, 2));
+
+    if (result.errors) {
+      console.error('GraphQL errors:', result.errors);
+      ctx.body = {
+        hasActiveSubscription: false,
+        shop: shop,
+        error: 'GraphQL query error',
+        message: result.errors[0]?.message
+      };
+      return;
+    }
+
+    const subscriptions = result.data?.currentAppInstallation?.activeSubscriptions || [];
+    
+    // Filter only active subscriptions (no test filtering needed in production)
+    const activeSubscriptions = subscriptions.filter(sub => sub.status === 'ACTIVE');
+    
+    const hasActiveSubscription = activeSubscriptions.length > 0;
+
+    const responseData = {
+      hasActiveSubscription: hasActiveSubscription,
+      shop: shop,
+      subscriptions: subscriptions,
+      activeCount: activeSubscriptions.length,
+      message: 'Real-time billing check from Shopify API'
+    };
+
+    // Cache the result
+    SUBSCRIPTION_CACHE[shop] = {
+      timestamp: Date.now(),
+      data: responseData
+    };
+
+    ctx.body = responseData;
+  } catch (error) {
+    console.error('Error checking billing status:', error);
+    ctx.body = {
+      hasActiveSubscription: false,
+      shop: shop,
+      error: error.message,
+      message: 'Error checking billing - defaulting to false'
+    };
+  }
+});
+
+// Cancel subscription
+router.post('/api/billing/cancel', authenticateRequest, async (ctx) => {
+  try {
+    const shop = ctx.state.shop;
+    const session = ctx.state.session;
+    const { subscriptionId } = ctx.request.body;
+
+    const mutation = `
+      mutation CancelSubscription($id: ID!) {
+        appSubscriptionCancel(id: $id) {
+          userErrors {
+            field
+            message
+          }
+          appSubscription {
+            id
+            status
+          }
+        }
+      }
+    `;
+
+    const response = await fetch(`https://${shop}/admin/api/2024-10/graphql.json`, {
+      method: 'POST',
+      headers: {
+        'X-Shopify-Access-Token': session.accessToken,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        query: mutation,
+        variables: { id: subscriptionId }
+      })
+    });
+
+    const result = await response.json();
+    
+    if (result.data?.appSubscriptionCancel?.userErrors?.length > 0) {
+      ctx.status = 400;
+      ctx.body = { 
+        error: 'Failed to cancel subscription',
+        details: result.data.appSubscriptionCancel.userErrors
+      };
+      return;
+    }
+
+    // Clear cache
+    delete SUBSCRIPTION_CACHE[shop];
+
+    ctx.body = { success: true, subscription: result.data?.appSubscriptionCancel?.appSubscription };
+  } catch (error) {
+    console.error('Error canceling subscription:', error);
+    ctx.status = 500;
+    ctx.body = { error: 'Internal server error' };
+  }
+});
+
+// Health check
+router.get('/health', async (ctx) => {
+  ctx.body = 'OK';
+});
+
+// Shop info
+router.get('/api/shop', async (ctx) => {
+  const shop = ctx.query.shop;
+
+  if (!shop) {
+    ctx.status = 400;
+    ctx.body = { error: 'Missing shop parameter' };
+    return;
+  }
+
+  ctx.body = {
+    success: true,
+    shop: {
+      name: shop,
+      domain: shop,
+      email: 'admin@' + shop
+    }
+  };
+});
+
+// Test API endpoint
+router.get('/api/test', authenticateRequest, async (ctx) => {
+  ctx.body = {
+    message: 'Success! Session is valid',
+    shop: ctx.state.shop,
+    hasAccessToken: !!ctx.state.session.accessToken,
+    scope: ctx.state.session.scope
+  };
+});
+
 // Mandatory compliance webhooks
 router.post('/webhooks/customers/data_request', async (ctx) => {
   try {
@@ -144,20 +557,17 @@ router.post('/webhooks/customers/data_request', async (ctx) => {
     const body = ctx.request.rawBody;
 
     if (!hmacHeader || !body) {
-      console.log('Missing HMAC header or body');
       ctx.status = 401;
       ctx.body = 'Unauthorized';
       return;
     }
 
-    // Verify HMAC
     const hash = crypto
       .createHmac('sha256', SHOPIFY_API_SECRET)
       .update(body, 'utf8')
       .digest('base64');
 
     if (hash !== hmacHeader) {
-      console.log('HMAC validation failed');
       ctx.status = 401;
       ctx.body = 'Unauthorized';
       return;
@@ -237,495 +647,12 @@ router.post('/webhooks/shop/redact', async (ctx) => {
   }
 });
 
-// Health check
-router.get('/health', async (ctx) => {
-  ctx.body = 'OK';
-});
-
-// Helper functions за Token Exchange подхода
-function getSessionTokenHeader(ctx) {
-  return ctx.headers['authorization']?.replace('Bearer ', '');
-}
-
-function getSessionTokenFromUrlParam(ctx) {
-  return ctx.query.id_token;
-}
-
-function redirectToSessionTokenBouncePage(ctx) {
-  const searchParams = new URLSearchParams(ctx.query);
-  searchParams.delete('id_token');
-  searchParams.append('shopify-reload', `${ctx.path}?${searchParams.toString()}`);
-  ctx.redirect(`/session-token-bounce?${searchParams.toString()}`);
-}
-
-// Session token bounce page
-router.get('/session-token-bounce', async (ctx) => {
-  ctx.set('Content-Type', 'text/html');
-  ctx.body = `
-    <!DOCTYPE html>
-    <html>
-      <head>
-        <meta name="shopify-api-key" content="${SHOPIFY_API_KEY}" />
-        <script src="https://cdn.shopify.com/shopifycloud/app-bridge.js"></script>
-      </head>
-      <body>Loading...</body>
-    </html>
-  `;
-});
-
-// Middleware за автентикация чрез Token Exchange
-async function authenticateRequest(ctx, next) {
-  console.log('=== AUTHENTICATING REQUEST ===');
-
-  let encodedSessionToken = null;
-  let decodedSessionToken = null;
-
-  try {
-    encodedSessionToken = getSessionTokenHeader(ctx) || getSessionTokenFromUrlParam(ctx);
-
-    if (!encodedSessionToken) {
-      console.log('No session token found');
-      const isDocumentRequest = !ctx.headers['authorization'];
-      if (isDocumentRequest) {
-        redirectToSessionTokenBouncePage(ctx);
-        return;
-      }
-
-      ctx.status = 401;
-      ctx.set('X-Shopify-Retry-Invalid-Session-Request', '1');
-      ctx.body = 'Unauthorized';
-      return;
-    }
-
-    decodedSessionToken = await shopify.session.decodeSessionToken(encodedSessionToken);
-    console.log('Session token decoded:', { dest: decodedSessionToken.dest, iss: decodedSessionToken.iss });
-
-  } catch (e) {
-    console.error('Invalid session token:', e.message);
-
-    const isDocumentRequest = !ctx.headers['authorization'];
-    if (isDocumentRequest) {
-      redirectToSessionTokenBouncePage(ctx);
-      return;
-    }
-
-    ctx.status = 401;
-    ctx.set('X-Shopify-Retry-Invalid-Session-Request', '1');
-    ctx.body = 'Unauthorized';
-    return;
-  }
-
-  const dest = new URL(decodedSessionToken.dest);
-  let shop = dest.hostname;
-
-  // Fallback: use shop from query parameter if available
-  const queryShop = ctx.query.shop;
-  if (queryShop && queryShop !== shop) {
-    console.log(`Shop mismatch: session token shop (${shop}) vs query shop (${queryShop})`);
-    // Use the shop from query parameter as it's more reliable for API calls
-    shop = queryShop;
-  }
-
-  const sessions = await memorySessionStorage.findSessionsByShop(shop);
-  let session = sessions.find(s => !s.isOnline);
-
-  if (!session || !session.accessToken || session.accessToken === 'placeholder') {
-    console.log('No valid session with access token, performing token exchange...');
-
-    try {
-      console.log('=== TOKEN EXCHANGE DEBUG ===');
-      console.log('Shop:', shop);
-      console.log('Session token length:', encodedSessionToken.length);
-      console.log('Session token starts with:', encodedSessionToken.substring(0, 20));
-      console.log('API Key set:', !!SHOPIFY_API_KEY);
-      console.log('API Secret set:', !!SHOPIFY_API_SECRET);
-      console.log('Host name:', HOST.replace('https://', ''));
-      console.log('Scopes from env:', SCOPES);
-      console.log('Scopes array:', SCOPES.split(','));
-      console.log('Shopify API scopes:', shopify.config.scopes);
-
-      console.log('About to perform token exchange...');
-      const tokenExchangeResult = await shopify.auth.tokenExchange({
-        shop: shop,
-        sessionToken: encodedSessionToken,
-      });
-
-      console.log('Token exchange successful');
-      console.log('Token exchange result:', {
-        hasAccessToken: !!tokenExchangeResult.accessToken,
-        accessTokenLength: tokenExchangeResult.accessToken?.length,
-        scope: tokenExchangeResult.scope,
-        expires: tokenExchangeResult.expires,
-        associatedUser: tokenExchangeResult.associatedUser,
-        accountOwner: tokenExchangeResult.accountOwner
-      });
-      console.log('Full token exchange result:', JSON.stringify(tokenExchangeResult, null, 2));
-
-      // Check if access token is in the session object
-      const accessToken = tokenExchangeResult.accessToken || tokenExchangeResult.session?.accessToken;
-      
-      if (!accessToken) {
-        console.error('Token exchange succeeded but no access token received');
-        console.error('This usually means:');
-        console.error('1. App is not installed in the store');
-        console.error('2. App does not have required scopes');
-        console.error('3. App is not properly configured in Partner Dashboard');
-        console.error('4. Store is not accessible');
-        ctx.status = 500;
-        ctx.body = 'Token exchange failed - no access token';
-        return;
-      }
-
-      console.log('Access token found:', accessToken.substring(0, 20) + '...');
-      console.log('Session scope:', tokenExchangeResult.session?.scope || tokenExchangeResult.scope);
-      console.log('Required scopes for billing:', 'read_customer_payment_methods,write_own_subscription_contracts');
-
-      const sessionId = `offline_${shop}`;
-      session = new Session({
-        id: sessionId,
-        shop: shop,
-        state: 'active',
-        isOnline: false,
-        accessToken: accessToken,
-        scope: tokenExchangeResult.session?.scope || tokenExchangeResult.scope,
-      });
-
-      await memorySessionStorage.storeSession(session);
-
-    } catch (error) {
-      console.error('Token exchange failed:', error);
-      console.error('Error details:', {
-        message: error.message,
-        statusCode: error.response?.statusCode,
-        body: error.response?.body,
-        headers: error.response?.headers
-      });
-
-      // Check if it's a configuration issue
-      if (error.message.includes('400 Bad Request')) {
-        console.error('Token exchange 400 error - possible causes:');
-        console.error('1. App not properly configured in Partner Dashboard');
-        console.error('2. Incorrect API key or secret');
-        console.error('3. App URL not matching configuration');
-        console.error('4. Missing required scopes');
-        console.error('5. App not installed in the store');
-      }
-
-      ctx.status = 500;
-      ctx.body = 'Token exchange failed';
-      return;
-    }
-  }
-
-  ctx.state.shop = shop;
-  ctx.state.session = session;
-
-  await next();
-}
-
-// Billing check middleware
-async function requiresSubscription(ctx, next) {
-  try {
-    const client = new shopify.clients.Graphql({
-      session: ctx.state.session,
-    });
-
-    // Check for active subscriptions
-    const response = await client.query({
-      data: `{
-        currentAppInstallation {
-          activeSubscriptions {
-            id
-            status
-            trialDays
-            createdAt
-          }
-        }
-      }`
-    });
-
-    const subscriptions = response.body.data.currentAppInstallation.activeSubscriptions || [];
-    const hasActiveSubscription = subscriptions.some(sub => sub.status === 'ACTIVE');
-
-    ctx.state.hasActiveSubscription = hasActiveSubscription;
-
-    // Always allow access to billing endpoints
-    if (ctx.path.includes('/api/billing') || ctx.path.includes('/api/subscription')) {
-      await next();
-      return;
-    }
-
-    // Check if needs subscription
-    if (!hasActiveSubscription && ctx.path !== '/') {
-      ctx.redirect('/?billing=required');
-      return;
-    }
-
-    await next();
-  } catch (error) {
-    console.error('Subscription check error:', error);
-    // Allow access on error to prevent blocking
-    await next();
-  }
-}
-
-router.get("/billing/confirm", async (ctx) => {
-  const { shop } = ctx.query;
-  // Изчистете кеша за да форсирате нова проверка
-  delete SUBSCRIPTION_CACHE[shop];
-  ctx.body = "Абонаментът е активиран! 🎉 Можеш да ползваш приложението.";
-});
-
-// Billing endpoints
-router.get('/api/billing/create', authenticateRequest, async (ctx) => {
-  // При Managed Pricing redirect-ваме към Shopify-hosted планова страница
-  const shop = ctx.state.shop;                     // зададено в authenticateRequest
-  const appHandle = process.env.SHOPIFY_APP_HANDLE;     // slug на приложението в Partner Dashboard
-
-  // URL за избор на план (виден само в admin iframe)
-  const confirmationUrl =
-    `https://admin.shopify.com/store/${shop}/charges/${appHandle}/pricing_plans`;
-
-  ctx.body = { confirmationUrl };
-});
-
-// Billing callback endpoint
-router.get('/api/billing/callback', authenticateRequest, async (ctx) => {
-  const subscriptionId = ctx.query.id;
-  const session = ctx.state.session;
-  if (!session) throw new Error('No Shopify session in ctx.state');
-  const client = new shopify.clients.Graphql({ session });
-
-  // Вадим статуса на току-що одобрената подписка
-  const QUERY = `
-    query getSubscription($id: ID!) {
-      node(id: $id) {
-        ... on AppSubscription {
-          id
-          status
-          currentPeriodEnd
-        }
-      }
-    }
-  `;
-  const { body } = await client.query({ data: { query: QUERY, variables: { id: subscriptionId } } });
-  const sub = body.data.node;
-  console.log('New subscription:', sub);
-
-  // TODO: запиши `sub` в твоята база по `session.shop`
-  // await saveSubscription(session.shop, sub);
-
-  // Връщаме търговеца обратно в приложението
-  ctx.redirect(`/?shop=${session.shop}&billing=success`);
-});
-
-// Billing callback is now handled by /auth/callback
-
-// Обновете /api/billing/status да винаги проверява реалния статус
-router.get('/api/billing/status', authenticateRequest, async (ctx) => {
-  const shop = ctx.query.shop;
-
-  if (!shop) {
-    ctx.status = 400;
-    ctx.body = { error: 'Missing shop parameter' };
-    return;
-  }
-
-  console.log('=== CHECKING REAL BILLING STATUS ===');
-  console.log('Shop:', shop);
-  
-  // Проверка за кеширан резултат (опционално)
-  const cached = SUBSCRIPTION_CACHE[shop];
-  if (cached && cached.timestamp > Date.now() - CACHE_DURATION) {
-    console.log('Returning cached billing status');
-    ctx.body = cached.data;
-    return;
-  }
-  
-  try {
-    if (!ctx.state.session?.accessToken) {
-      console.log('No access token - app not properly installed');
-      ctx.body = {
-        hasActiveSubscription: false,
-        shop: shop,
-        message: 'No access token - app not installed'
-      };
-      return;
-    }
-    
-    // ВИНАГИ проверявайте реалния статус от Shopify API
-    const billingCheckResponse = await fetch(
-      `https://${shop}/admin/api/2024-10/graphql.json`,
-      {
-        method: "POST",
-        headers: {
-          "X-Shopify-Access-Token": ctx.state.session.accessToken,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          query: `{
-            currentAppInstallation {
-              activeSubscriptions {
-                id
-                status
-                trialDays
-                createdAt
-                test
-              }
-            }
-          }`
-        }),
-      }
-    );
-
-    const billingData = await billingCheckResponse.json();
-    console.log("Real billing check response:", billingData);
-
-    // Проверка за грешки
-    if (billingData.errors) {
-      console.error('GraphQL errors:', billingData.errors);
-      ctx.body = {
-        hasActiveSubscription: false,
-        shop: shop,
-        error: 'GraphQL query error',
-        message: billingData.errors[0]?.message
-      };
-      return;
-    }
-
-    const subscriptions = billingData.data?.currentAppInstallation?.activeSubscriptions || [];
-    
-    // Филтрирайте тестови абонаменти ако сте в production
-    const activeSubscriptions = process.env.NODE_ENV === 'production' 
-      ? subscriptions.filter(sub => sub.status === 'ACTIVE' && !sub.test)
-      : subscriptions.filter(sub => sub.status === 'ACTIVE');
-    
-    const hasActiveSubscription = activeSubscriptions.length > 0;
-
-    console.log("Found subscriptions:", subscriptions);
-    console.log("Active subscriptions:", activeSubscriptions);
-    console.log("Has active subscription:", hasActiveSubscription);
-
-    const responseData = {
-      hasActiveSubscription: hasActiveSubscription,
-      shop: shop,
-      subscriptions: subscriptions,
-      activeCount: activeSubscriptions.length,
-      message: 'Real-time billing check from Shopify API'
-    };
-
-    // Кеширайте резултата
-    SUBSCRIPTION_CACHE[shop] = {
-      timestamp: Date.now(),
-      data: responseData
-    };
-
-    ctx.body = responseData;
-  } catch (error) {
-    console.error("Error checking billing status:", error);
-    ctx.body = {
-      hasActiveSubscription: false,
-      shop: shop,
-      error: error.message,
-      message: 'Error checking billing - defaulting to false'
-    };
-  }
-});
-
-// API endpoints
-router.get('/api/test', authenticateRequest, async (ctx) => {
-  console.log('=== API TEST ===');
-  ctx.body = {
-    message: 'Success! Session is valid',
-    shop: ctx.state.shop,
-    hasAccessToken: !!ctx.state.session.accessToken,
-    scope: ctx.state.session.scope
-  };
-});
-
-router.get('/api/shop', async (ctx) => {
-  console.log('=== SHOP INFO API ===');
-  const shop = ctx.query.shop;
-
-  if (!shop) {
-    ctx.status = 400;
-    ctx.body = { error: 'Missing shop parameter' };
-    return;
-  }
-
-  // For now, just return basic info without making API calls
-  // This avoids authentication issues
-  ctx.body = {
-    success: true,
-    shop: {
-      name: shop,
-      domain: shop,
-      email: 'admin@' + shop
-    }
-  };
-});
-
-router.get('/api/orders', authenticateRequest, requiresSubscription, async (ctx) => {
-  console.log('=== ORDERS API TEST ===');
-
-  try {
-    const response = await fetch(`https://${ctx.state.shop}/admin/api/2024-10/orders.json?limit=10`, {
-      headers: {
-        'X-Shopify-Access-Token': ctx.state.session.accessToken,
-        'Content-Type': 'application/json'
-      }
-    });
-
-    if (!response.ok) {
-      throw new Error(`Shopify API error: ${response.status}`);
-    }
-
-    const orders = await response.json();
-    ctx.body = {
-      success: true,
-      shop: ctx.state.shop,
-      ordersCount: orders.orders?.length || 0,
-      orders: orders.orders || []
-    };
-
-  } catch (error) {
-    console.error('Error fetching orders:', error);
-    ctx.status = 500;
-    ctx.body = 'Failed to fetch orders: ' + error.message;
-  }
-});
-
-// Премахнете локалното хранилище или го използвайте само като кеш
-let SUBSCRIPTION_CACHE = {}; // Преименувайте за яснота
-const CACHE_DURATION = 5 * 60 * 1000; // 5 минути кеш
-
-router.get('/auth', async (ctx) => {
-  const shop = ctx.query.shop;
-  const authRoute = await shopify.auth.begin({
-    shop,
-    callbackPath: '/auth/callback',
-    isOnline: true,
-    rawRequest: ctx.req,
-    rawResponse: ctx.res,
-  });
-  ctx.redirect(authRoute);
-});
-
-router.get("/auth/callback", async (ctx) => {
-  const session = await shopify.auth.callback({
-    rawRequest: ctx.req,
-    rawResponse: ctx.res,
-  });
-  ctx.redirect(`/api/billing/create?shop=${session.shop}`);
-});
-
-// Добавете webhook за деинсталиране на приложението
+// App uninstalled webhook
 router.post('/webhooks/app/uninstalled', async (ctx) => {
   try {
     const hmacHeader = ctx.get('X-Shopify-Hmac-Sha256');
     const body = ctx.request.rawBody;
 
-    // Verify HMAC
     const hash = crypto
       .createHmac('sha256', SHOPIFY_API_SECRET)
       .update(body, 'utf8')
@@ -742,10 +669,10 @@ router.post('/webhooks/app/uninstalled', async (ctx) => {
     
     console.log('App uninstalled from shop:', shop);
     
-    // Изчистете всички данни за този магазин
+    // Clear all data for this shop
     delete SUBSCRIPTION_CACHE[shop];
     
-    // Изтрийте сесиите
+    // Delete sessions
     const sessions = await memorySessionStorage.findSessionsByShop(shop);
     for (const session of sessions) {
       await memorySessionStorage.deleteSession(session.id);
@@ -763,8 +690,7 @@ router.post('/webhooks/app/uninstalled', async (ctx) => {
 // Main app route
 router.get('(/)', async (ctx) => {
   console.log('=== MAIN ROUTE ===');
-  const shop = ctx.query.shop; // Използваме shop от query параметър
-  const host = ctx.query.host;
+  const shop = ctx.query.shop;
 
   if (!shop) {
     ctx.body = "Missing shop parameter. Please install the app through Shopify.";
@@ -772,17 +698,11 @@ router.get('(/)', async (ctx) => {
     return;
   }
 
-  // НЕ проверявайте локално хранилище тук
-  // Оставете клиентския код да провери чрез API
-  
-  const { billing, checkBilling } = ctx.query;
+  const { billing } = ctx.query;
   if (billing === 'success') {
     console.log('Billing success callback received');
-    // Изчистете кеша за да форсирате нова проверка
     delete SUBSCRIPTION_CACHE[shop];
   }
-
-  // Вашият HTML остава същият...
 
   ctx.set('Content-Type', 'text/html');
   ctx.body = `
@@ -794,16 +714,6 @@ router.get('(/)', async (ctx) => {
   <title>BGN/EUR Price Display</title>
   <meta name="shopify-api-key" content="${SHOPIFY_API_KEY}" />
   <script src="https://cdn.shopify.com/shopifycloud/app-bridge.js"></script>
-  <script>
-    // Initialize App Bridge
-    document.addEventListener('DOMContentLoaded', function() {
-      if (window.shopify && window.shopify.config) {
-        console.log('App Bridge initialized');
-      } else {
-        console.log('App Bridge not available');
-      }
-    });
-  </script>
   <style>
     body {
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
@@ -922,10 +832,19 @@ router.get('(/)', async (ctx) => {
       font-weight: 500;
       font-size: 15px;
       transition: all 0.2s;
+      border: none;
+      cursor: pointer;
     }
     .big-button:hover {
       background: #000;
       transform: translateY(-1px);
+    }
+    .big-button.warning {
+      background: #ffc107;
+      color: #212529;
+    }
+    .big-button.warning:hover {
+      background: #e0a800;
     }
     .steps {
       counter-reset: step-counter;
@@ -981,21 +900,6 @@ router.get('(/)', async (ctx) => {
       font-size: 14px;
       line-height: 1.5;
     }
-    .badge {
-      display: inline-block;
-      padding: 4px 12px;
-      background: #f3f4f6;
-      border-radius: 4px;
-      font-size: 12px;
-      font-weight: 500;
-      color: #616161;
-      text-transform: uppercase;
-      letter-spacing: 0.5px;
-    }
-    .badge.new {
-      background: #202223;
-      color: white;
-    }
     .warning {
       background: #f9fafb;
       border: 1px solid #e1e3e5;
@@ -1003,34 +907,6 @@ router.get('(/)', async (ctx) => {
       padding: 20px;
       margin: 24px 0;
       line-height: 1.6;
-    }
-    .button {
-      display: inline-block;
-      padding: 10px 20px;
-      background: #202223;
-      color: white;
-      text-decoration: none;
-      border-radius: 6px;
-      font-weight: 500;
-      margin-top: 16px;
-      transition: background 0.2s;
-    }
-    .button:hover {
-      background: #000;
-    }
-    .footer {
-      text-align: center;
-      color: #616161;
-      font-size: 14px;
-      margin-top: 40px;
-      line-height: 1.6;
-    }
-    code {
-      background: #f3f4f6;
-      padding: 2px 6px;
-      border-radius: 4px;
-      font-family: monospace;
-      font-size: 14px;
     }
     .loading {
       text-align: center;
@@ -1046,6 +922,36 @@ router.get('(/)', async (ctx) => {
       border-radius: 4px;
       font-size: 12px;
       margin-left: 8px;
+    }
+    .billing-prompt {
+      background: #fff3cd;
+      border: 2px solid #ffc107;
+      border-radius: 8px;
+      padding: 24px;
+      margin-bottom: 24px;
+      text-align: center;
+    }
+    .billing-prompt h3 {
+      margin: 0 0 16px 0;
+      color: #856404;
+    }
+    .billing-prompt p {
+      margin: 0 0 20px 0;
+      color: #856404;
+    }
+    .footer {
+      text-align: center;
+      color: #616161;
+      font-size: 14px;
+      margin-top: 40px;
+      line-height: 1.6;
+    }
+    code {
+      background: #f3f4f6;
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-family: monospace;
+      font-size: 14px;
     }
     ul {
       line-height: 1.8;
@@ -1065,7 +971,9 @@ router.get('(/)', async (ctx) => {
       <span id="status-badge" style="display: none;" class="success-badge">✓ Активно</span>
     </div>
 
-    <div class="quick-action">
+    <div id="billing-prompt" style="display: none;"></div>
+
+    <div class="quick-action" id="quick-action">
       <h3>Бърз старт</h3>
       <p style="margin-bottom: 20px;">Инсталирайте extension-а с едно кликване:</p>
       <a href="https://${shop}/admin/themes/current/editor?context=checkout&template=checkout" 
@@ -1116,7 +1024,7 @@ router.get('(/)', async (ctx) => {
           <div class="feature">
             <div class="feature-text">
               <h3>Автоматично преминаване към EUR</h3>
-              <p>След 01.01.2026 г. когато смените валутата на магазина (или на пазара България)  на евро, приложението автоматично ще показва EUR като основна валута и BGN като референтна.</p>
+              <p>След 01.01.2026 г. когато смените валутата на магазина на евро, приложението автоматично ще показва EUR като основна валута и BGN като референтна.</p>
             </div>
           </div>
           <div class="feature">
@@ -1153,150 +1061,144 @@ router.get('(/)', async (ctx) => {
   
   <script>
     let billingStatus = null;
+    let sessionToken = null;
     
-         async function loadAppData() {
-       console.log('loadAppData called');
-       try {
-         const url = '/api/shop?shop=${shop}';
-         console.log('Fetching:', url);
-         const response = await fetch(url);
-         console.log('Response status:', response.status);
-         console.log('Response ok:', response.ok);
-         
-         if (response.ok) {
-           const data = await response.json();
-           console.log('Shop data loaded:', data);
-           document.getElementById('loading').style.display = 'none';
-           document.getElementById('status-badge').style.display = 'inline-block';
-           
-           // Check billing status
-           checkBillingStatus();
-         } else {
-           console.error('Failed to load shop data, status:', response.status);
-           const errorText = await response.text();
-           console.error('Error response:', errorText);
-           document.getElementById('loading').innerHTML = 'Грешка при зареждане';
-         }
-       } catch (error) {
-         console.error('Error loading app data:', error);
-         document.getElementById('loading').innerHTML = 'Грешка при зареждане';
-       }
-     }
+    // Get session token from different sources
+    function getSessionToken() {
+      // Try different methods to get session token
+      if (window.shopify?.idToken) {
+        return window.shopify.idToken();
+      }
+      
+      // Check URL params
+      const urlParams = new URLSearchParams(window.location.search);
+      const tokenFromUrl = urlParams.get('id_token');
+      if (tokenFromUrl) {
+        return tokenFromUrl;
+      }
+      
+      // Check if we have it in sessionStorage
+      const storedToken = sessionStorage.getItem('shopify-id-token');
+      if (storedToken) {
+        return storedToken;
+      }
+      
+      return null;
+    }
     
-         async function checkBillingStatus() {
-       console.log('=== CHECK BILLING STATUS CALLED ===');
-       console.log('Shop:', '${shop}');
-       console.log('Current time:', new Date().toISOString());
-       try {
-         const url = '/api/billing/status?shop=${shop}';
-         console.log('Fetching billing status:', url);
-         const response = await fetch(url);
-         console.log('Billing response status:', response.status);
-         console.log('Billing response ok:', response.ok);
-         
-         if (response.ok) {
-           const data = await response.json();
-           billingStatus = data.hasActiveSubscription;
-           console.log('=== BILLING STATUS CHECK ===');
-           console.log('Full billing response:', data);
-           console.log('Has active subscription:', billingStatus);
-           console.log('Shop:', data.shop);
-           console.log('Message:', data.message);
-           console.log('Subscriptions:', data.subscriptions);
-           console.log('========================');
-           if (!billingStatus) {
-             console.log('Billing status is false - showing billing prompt');
-             showBillingPrompt();
-           } else {
-             console.log('Billing status is true - subscription is active');
-           }
-         } else {
-           console.error('Failed to check billing status, status:', response.status);
-           const errorText = await response.text();
-           console.error('Billing error response:', errorText);
-         }
-       } catch (error) {
-         console.error('Error checking billing:', error);
-       }
-     }
+    async function loadAppData() {
+      console.log('loadAppData called');
+      try {
+        const url = '/api/shop?shop=${shop}';
+        console.log('Fetching:', url);
+        const response = await fetch(url);
+        console.log('Response status:', response.status);
+        
+        if (response.ok) {
+          const data = await response.json();
+          console.log('Shop data loaded:', data);
+          document.getElementById('loading').style.display = 'none';
+          document.getElementById('status-badge').style.display = 'inline-block';
+          
+          // Check billing status
+          checkBillingStatus();
+        } else {
+          console.error('Failed to load shop data');
+          document.getElementById('loading').innerHTML = 'Грешка при зареждане';
+        }
+      } catch (error) {
+        console.error('Error loading app data:', error);
+        document.getElementById('loading').innerHTML = 'Грешка при зареждане';
+      }
+    }
+    
+    async function checkBillingStatus() {
+      console.log('=== CHECK BILLING STATUS ===');
+      try {
+        sessionToken = getSessionToken();
+        
+        if (!sessionToken) {
+          console.error('No session token available');
+          // Try to reload the page to get a fresh token
+          if (window.shopify?.idToken) {
+            window.shopify.idToken().then(token => {
+              sessionToken = token;
+              sessionStorage.setItem('shopify-id-token', token);
+              checkBillingStatusWithToken();
+            });
+          }
+          return;
+        }
+        
+        await checkBillingStatusWithToken();
+      } catch (error) {
+        console.error('Error checking billing:', error);
+      }
+    }
+    
+    async function checkBillingStatusWithToken() {
+      const url = '/api/billing/status?shop=${shop}';
+      console.log('Fetching billing status:', url);
+      
+      const response = await fetch(url, {
+        headers: {
+          'Authorization': 'Bearer ' + sessionToken,
+          'Content-Type': 'application/json'
+        }
+      });
+      
+      if (response.ok) {
+        const data = await response.json();
+        billingStatus = data.hasActiveSubscription;
+        console.log('Billing status:', billingStatus);
+        console.log('Full response:', data);
+        
+        if (!billingStatus) {
+          console.log('No active subscription - showing billing prompt');
+          showBillingPrompt();
+        } else {
+          console.log('Active subscription found');
+        }
+      } else {
+        console.error('Failed to check billing status');
+      }
+    }
     
     function showBillingPrompt() {
-      console.log('=== SHOWING BILLING PROMPT ===');
-      console.log('Billing status is false - showing prompt');
-      const billingPrompt = \`
-        <div style="background: #fff3cd; border: 2px solid #ffc107; border-radius: 8px; padding: 24px; margin-bottom: 24px; text-align: center;">
-          <h3 style="margin: 0 0 16px 0; color: #856404;">🎁 Започнете 5-дневен безплатен пробен период</h3>
-          <p style="margin: 0 0 20px 0; color: #856404;">
+      console.log('Showing billing prompt');
+      const billingPromptHtml = \`
+        <div class="billing-prompt">
+          <h3>🎁 Започнете 5-дневен безплатен пробен период</h3>
+          <p>
             След пробния период: $14.99/месец<br>
             Можете да отмените по всяко време
           </p>
-          <button onclick="startBilling()" class="big-button" style="background: #ffc107; color: #212529;">
+          <button onclick="startBilling()" class="big-button warning">
             Започни безплатен пробен период
           </button>
-          <br><br>
-          <a href="/api/billing/create?shop=${shop}" class="big-button" style="background: #28a745; color: white; text-decoration: none; display: inline-block; margin-top: 10px;">
-            Директно стартиране на абонамент
-          </a>
         </div>
       \`;
       
-      // Insert billing prompt before main content
-      const container = document.querySelector('.container');
-      const header = document.querySelector('.header');
-      header.insertAdjacentHTML('afterend', billingPrompt);
+      document.getElementById('billing-prompt').innerHTML = billingPromptHtml;
+      document.getElementById('billing-prompt').style.display = 'block';
       
-      // Hide main functionality
-      document.querySelector('.quick-action').style.opacity = '0.5';
-      document.querySelector('.quick-action').style.pointerEvents = 'none';
+      // Disable main functionality
+      document.getElementById('quick-action').style.opacity = '0.5';
+      document.getElementById('quick-action').style.pointerEvents = 'none';
     }
     
     async function startBilling() {
       try {
-        // Try different methods to get session token
-        let sessionToken = null;
-        
-        // Method 1: Try App Bridge config
-        if (window.shopify?.config?.sessionToken) {
-          sessionToken = window.shopify.config.sessionToken;
-        }
-        // Method 2: Try App Bridge session
-        else if (window.shopify?.session?.token) {
-          sessionToken = window.shopify.session.token;
-        }
-        // Method 3: Try to get from URL parameter
-        else {
-          const urlParams = new URLSearchParams(window.location.search);
-          sessionToken = urlParams.get('id_token');
-        }
-        
-        // Method 4: Try to get from URL hash (for embedded apps)
         if (!sessionToken) {
-          const hashParams = new URLSearchParams(window.location.hash.substring(1));
-          sessionToken = hashParams.get('id_token');
-        }
-        
-        // Method 5: Try to get from parent window (for embedded apps)
-        if (!sessionToken && window.location !== window.parent.location) {
-          try {
-            const parentParams = new URLSearchParams(window.parent.location.search);
-            sessionToken = parentParams.get('id_token');
-          } catch (e) {
-            console.log('Cannot access parent window:', e.message);
+          sessionToken = getSessionToken();
+          if (!sessionToken) {
+            alert('Грешка: Не може да се получи session token. Моля презаредете страницата.');
+            return;
           }
         }
         
-        if (!sessionToken) {
-          console.error('No session token found. Available:', {
-            shopifyConfig: !!window.shopify?.config,
-            shopifySession: !!window.shopify?.session,
-            urlParams: window.location.search
-          });
-          alert('Грешка: Няма session token. Моля опитайте отново.');
-          return;
-        }
-
-        console.log('Using session token:', sessionToken.substring(0, 20) + '...');
-
+        console.log('Starting billing with token:', sessionToken.substring(0, 20) + '...');
+        
         const response = await fetch('/api/billing/create?shop=${shop}', {
           headers: {
             'Authorization': 'Bearer ' + sessionToken,
@@ -1305,21 +1207,24 @@ router.get('(/)', async (ctx) => {
         });
         
         if (!response.ok) {
-          console.error('HTTP ' + response.status + ': ' + response.statusText);
-          throw new Error('HTTP ' + response.status + ': ' + response.statusText);
+          const errorData = await response.json();
+          console.error('Billing create error:', errorData);
+          alert('Грешка при стартиране на абонамент. Моля опитайте отново.');
+          return;
         }
         
         const data = await response.json();
-        console.log('Billing data:', data);
+        console.log('Billing response:', data);
+        
         if (data.confirmationUrl) {
-          // Redirect to Shopify billing page
+          // Redirect to Shopify billing confirmation page
           window.top.location.href = data.confirmationUrl;
         } else {
-          alert('Грешка при стартиране на пробен период. Моля опитайте отново.');
+          alert('Грешка при получаване на URL за потвърждение.');
         }
       } catch (error) {
         console.error('Billing error:', error);
-        alert('Грешка при стартиране на пробен период. Моля опитайте отново.');
+        alert('Грешка при стартиране на абонамент: ' + error.message);
       }
     }
     
@@ -1341,24 +1246,32 @@ router.get('(/)', async (ctx) => {
     const urlParams = new URLSearchParams(window.location.search);
     if (urlParams.get('billing') === 'success') {
       alert('🎉 Успешно активирахте плана! Вече можете да използвате всички функции.');
-    } else if (urlParams.get('billing') === 'declined') {
-      alert('❌ Плащането беше отказано. Моля опитайте отново.');
+      // Remove the parameter from URL
+      window.history.replaceState({}, document.title, window.location.pathname + '?shop=${shop}');
+    } else if (urlParams.get('billing') === 'error') {
+      alert('❌ Възникна грешка при активиране на плана. Моля опитайте отново.');
     }
     
-    // Debug function to check App Bridge status
-    function debugAppBridge() {
-      console.log('=== APP BRIDGE DEBUG ===');
-      console.log('window.shopify:', !!window.shopify);
-      console.log('window.shopify.config:', !!window.shopify?.config);
-      console.log('window.shopify.session:', !!window.shopify?.session);
-      console.log('URL params:', window.location.search);
-      console.log('Is embedded:', window.location !== window.parent.location);
-      console.log('========================');
-    }
-    
-    // Check App Bridge status after a delay
-    setTimeout(debugAppBridge, 2000);
-    setTimeout(loadAppData, 1000);
+    // Initialize App Bridge and load data
+    document.addEventListener('DOMContentLoaded', function() {
+      console.log('DOM loaded, initializing...');
+      
+      // Try to get App Bridge token
+      if (window.shopify?.idToken) {
+        window.shopify.idToken().then(token => {
+          console.log('Got App Bridge token');
+          sessionToken = token;
+          sessionStorage.setItem('shopify-id-token', token);
+          loadAppData();
+        }).catch(err => {
+          console.error('Failed to get App Bridge token:', err);
+          loadAppData();
+        });
+      } else {
+        console.log('App Bridge not available, loading anyway');
+        setTimeout(loadAppData, 1000);
+      }
+    });
   </script>
 </body>
 </html>
@@ -1373,7 +1286,8 @@ router.get('/debug', async (ctx) => {
       id: id,
       shop: session.shop,
       isOnline: session.isOnline,
-      hasToken: !!session.accessToken && session.accessToken !== 'placeholder'
+      hasToken: !!session.accessToken && session.accessToken !== 'placeholder',
+      tokenLength: session.accessToken?.length
     });
   }
 
@@ -1391,99 +1305,16 @@ router.get('/debug', async (ctx) => {
   };
 });
 
-// Check app installation
-router.get('/api/check-installation', authenticateRequest, async (ctx) => {
-  const shop = ctx.query.shop;
-  
-  if (!shop) {
-    ctx.status = 400;
-    ctx.body = { error: 'Missing shop parameter' };
-    return;
-  }
-
-  try {
-    console.log('=== CHECKING APP INSTALLATION ===');
-    console.log('Shop:', shop);
-    console.log('Session access token length:', ctx.state.session.accessToken?.length);
-
-    // Try to get app installation info
-    const response = await fetch(`https://${shop}/admin/api/2024-10/app_installations.json`, {
-      headers: {
-        'X-Shopify-Access-Token': ctx.state.session.accessToken,
-        'Content-Type': 'application/json'
-      }
-    });
-
-    const responseText = await response.text();
-    console.log('Installation check response:', {
-      status: response.status,
-      statusText: response.statusText,
-      body: responseText.substring(0, 500)
-    });
-
-    ctx.body = {
-      shop: shop,
-      installationCheck: {
-        status: response.status,
-        statusText: response.statusText,
-        hasAccessToken: !!ctx.state.session.accessToken,
-        accessTokenLength: ctx.state.session.accessToken?.length,
-        responseBody: responseText.substring(0, 500)
-      }
-    };
-  } catch (error) {
-    console.error('Installation check error:', error);
-    ctx.body = {
-      shop: shop,
-      installationCheck: {
-        error: error.message,
-        hasAccessToken: !!ctx.state.session.accessToken,
-        accessTokenLength: ctx.state.session.accessToken?.length
-      }
-    };
-  }
-});
-
 app.use(router.routes());
 app.use(router.allowedMethods());
 
 const PORT = process.env.PORT || 3000;
 
-// Функция за регистриране на webhooks
-async function registerWebhooks(shop, accessToken) {
-  try {
-    const webhook = {
-      webhook: {
-        topic: 'app/uninstalled',
-        address: `${HOST}/webhooks/app/uninstalled`,
-        format: 'json'
-      }
-    };
-    
-    const response = await fetch(`https://${shop}/admin/api/2024-10/webhooks.json`, {
-      method: 'POST',
-      headers: {
-        'X-Shopify-Access-Token': accessToken,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify(webhook)
-    });
-    
-    if (response.ok) {
-      console.log('Webhook registered successfully for shop:', shop);
-    } else {
-      console.error('Failed to register webhook for shop:', shop);
-    }
-  } catch (error) {
-    console.error('Error registering webhook:', error);
-  }
-}
-
 app.listen(PORT, '0.0.0.0', function () {
   console.log(`✓ Server listening on port ${PORT}`);
-  console.log(`✓ Using Token Exchange authentication (Shopify managed install)`);
+  console.log(`✓ Using Token Exchange authentication`);
   console.log(`✓ App URL: ${HOST}`);
-  console.log(`✓ Webhook endpoint: ${HOST}/webhooks/app/uninstalled`);
+  console.log(`✓ Billing API configured`);
 }).on('error', (err) => {
   console.error('FATAL: Server failed to start:', err);
   process.exit(1);
