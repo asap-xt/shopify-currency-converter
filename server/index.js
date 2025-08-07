@@ -515,7 +515,7 @@ router.post('/api/billing/cancel', authenticateRequest, async (ctx) => {
   }
 });
 
-// OAuth routes for initial installation
+// OAuth routes for initial installation (handled by Shopify)
 router.get('/auth', async (ctx) => {
   const shop = ctx.query.shop;
   if (!shop) {
@@ -524,45 +524,26 @@ router.get('/auth', async (ctx) => {
     return;
   }
 
-  console.log('=== STARTING OAUTH ===');
+  console.log('=== OAUTH ROUTE HIT ===');
   console.log('Shop:', shop);
-
-  try {
-    const authRoute = await shopify.auth.begin({
-      shop,
-      callbackPath: '/auth/callback',
-      isOnline: false, // Use offline tokens for billing
-      rawRequest: ctx.req,
-      rawResponse: ctx.res,
-    });
-    
-    console.log('Redirecting to:', authRoute);
-    ctx.redirect(authRoute);
-  } catch (error) {
-    console.error('OAuth begin error:', error);
-    ctx.status = 500;
-    ctx.body = 'Error starting OAuth flow';
-  }
+  
+  // For embedded apps, Shopify handles the initial OAuth flow
+  // Just redirect to the app
+  ctx.redirect(`/?shop=${shop}&host=${ctx.query.host}`);
 });
 
 router.get('/auth/callback', async (ctx) => {
   try {
     console.log('=== OAUTH CALLBACK ===');
     
-    const callbackResponse = await shopify.auth.callback({
-      rawRequest: ctx.req,
-      rawResponse: ctx.res,
-    });
-
-    const { session } = callbackResponse;
-    console.log('OAuth callback successful, shop:', session.shop);
-    console.log('Has access token:', !!session.accessToken);
-
-    // Store the session
-    await memorySessionStorage.storeSession(session);
-
-    // Redirect to billing create
-    const redirectUrl = `/?shop=${session.shop}&host=${ctx.query.host}&billing=needed`;
+    // For embedded apps with Token Exchange, 
+    // Shopify handles the OAuth flow automatically
+    // This callback is mainly for redirect URLs
+    
+    const { shop, host } = ctx.query;
+    
+    // Redirect to main app page
+    const redirectUrl = `/?shop=${shop}&host=${host}`;
     console.log('Redirecting to:', redirectUrl);
     
     ctx.redirect(redirectUrl);
@@ -757,22 +738,13 @@ router.get('(/)', async (ctx) => {
     return;
   }
 
-  // Check if we have a valid session
-  const sessions = await memorySessionStorage.findSessionsByShop(shop);
-  const hasValidSession = sessions.some(s => s.accessToken && s.accessToken !== 'placeholder');
-
-  if (!hasValidSession) {
-    console.log('No valid session found, starting OAuth flow');
-    ctx.redirect(`/auth?shop=${shop}`);
-    return;
-  }
-
+  // For embedded apps, we should not check for session here
+  // Let the frontend handle authentication via App Bridge
+  
   const { billing } = ctx.query;
   if (billing === 'success') {
     console.log('Billing success callback received');
     delete SUBSCRIPTION_CACHE[shop];
-  } else if (billing === 'needed') {
-    console.log('New installation, billing needed');
   }
 
   ctx.set('Content-Type', 'text/html');
@@ -1165,6 +1137,16 @@ router.get('(/)', async (ctx) => {
     async function loadAppData() {
       console.log('loadAppData called');
       try {
+        // First, ensure we have a session token
+        if (!sessionToken) {
+          sessionToken = await getSessionToken();
+          if (!sessionToken) {
+            console.error('No session token available for loadAppData');
+            document.getElementById('loading').innerHTML = 'Грешка: Няма достъп';
+            return;
+          }
+        }
+        
         const url = '/api/shop?shop=${shop}';
         console.log('Fetching:', url);
         const response = await fetch(url);
@@ -1176,7 +1158,7 @@ router.get('(/)', async (ctx) => {
           document.getElementById('loading').style.display = 'none';
           document.getElementById('status-badge').style.display = 'inline-block';
           
-          // Check billing status
+          // ALWAYS check billing status for new installations
           checkBillingStatus();
         } else {
           console.error('Failed to load shop data');
