@@ -2,69 +2,492 @@
 import 'dotenv/config';
 import '@shopify/shopify-api/adapters/node';
 import Koa from 'koa';
-import Router from 'koa-router';
 import koaSession from 'koa-session';
-import { shopifyApi, LATEST_API_VERSION } from '@shopify/shopify-api';
+import Router from 'koa-router';
+import crypto from 'crypto';
+import getRawBody from 'raw-body';
+import { shopifyApi, LATEST_API_VERSION, Session, GraphqlClient } from '@shopify/shopify-api';
+
+// Environment check
+console.log('=== Environment Variables Check ===');
+console.log('SHOPIFY_API_KEY:', process.env.SHOPIFY_API_KEY ? 'SET' : 'MISSING');
+console.log('SHOPIFY_API_SECRET:', process.env.SHOPIFY_API_SECRET ? 'SET' : 'MISSING');
+console.log('SCOPES:', process.env.SCOPES);
+console.log('HOST:', process.env.HOST);
+console.log('====================================');
+
+// Debug environment variables
+console.log('=== DEBUG ENV VARS ===');
+console.log('SHOPIFY_API_KEY length:', process.env.SHOPIFY_API_KEY?.length);
+console.log('SHOPIFY_API_SECRET length:', process.env.SHOPIFY_API_SECRET?.length);
+console.log('SCOPES length:', process.env.SCOPES?.length);
+console.log('HOST length:', process.env.HOST?.length);
+console.log('SCOPES value:', process.env.SCOPES);
+console.log('========================');
+
+// Session storage
+const memorySessionStorage = {
+  storage: new Map(),
+
+  async storeSession(session) {
+    this.storage.set(session.id, session);
+    return true;
+  },
+
+  async loadSession(id) {
+    return this.storage.get(id);
+  },
+
+  async deleteSession(id) {
+    this.storage.delete(id);
+    return true;
+  },
+
+  async findSessionsByShop(shop) {
+    const sessions = [];
+    for (const [id, session] of this.storage) {
+      if (session.shop === shop) {
+        sessions.push(session);
+      }
+    }
+    return sessions;
+  }
+};
 
 const {
   SHOPIFY_API_KEY,
   SHOPIFY_API_SECRET,
-  SCOPES,       // например "read_products,write_orders"
-  HOST,         // например "https://my-app.example.com"
-  PORT = 3000
+  SCOPES,
+  HOST
 } = process.env;
 
+// Validation
+console.log('=== VALIDATION CHECK ===');
+console.log('SHOPIFY_API_KEY exists:', !!SHOPIFY_API_KEY);
+console.log('SHOPIFY_API_SECRET exists:', !!SHOPIFY_API_SECRET);
+console.log('SCOPES exists:', !!SCOPES);
+console.log('HOST exists:', !!HOST);
+console.log('========================');
+
+if (!SHOPIFY_API_KEY || !SHOPIFY_API_SECRET || !SCOPES || !HOST) {
+  console.error('FATAL: Missing required environment variables!');
+  console.error('Missing:', {
+    SHOPIFY_API_KEY: !SHOPIFY_API_KEY,
+    SHOPIFY_API_SECRET: !SHOPIFY_API_SECRET,
+    SCOPES: !SCOPES,
+    HOST: !HOST
+  });
+  process.exit(1);
+}
+
+// Initialize Shopify API
 const shopify = shopifyApi({
-  apiKey:        SHOPIFY_API_KEY,
-  apiSecretKey:  SHOPIFY_API_SECRET,
-  scopes:        SCOPES.split(','),
-  hostName:      HOST.replace(/^https?:\/\//, ''),
-  apiVersion:    LATEST_API_VERSION,
+  apiKey: SHOPIFY_API_KEY,
+  apiSecretKey: SHOPIFY_API_SECRET,
+  scopes: SCOPES.split(','),
+  hostName: HOST.replace('https://', ''),
+  apiVersion: LATEST_API_VERSION,
   isEmbeddedApp: true,
-  auth:          { useOnlineTokens: true },  // online tokens, ако искате offline – сменете на false
-  // sessionStorage: // по подразбиране е MemorySessionStorage от adapter-а
+  sessionStorage: memorySessionStorage,
+  auth: {
+    useOnlineTokens: true,
+  },
 });
 
 const app = new Koa();
 app.keys = [SHOPIFY_API_SECRET];
+
+// Raw body middleware за webhooks - ВАЖНО: Трябва да е ПРЕДИ другите middleware
+app.use(async (ctx, next) => {
+  if (ctx.path.startsWith('/webhooks/')) {
+    ctx.request.rawBody = await getRawBody(ctx.req, {
+      length: ctx.request.headers['content-length'],
+      encoding: 'utf8'
+    });
+  }
+  await next();
+});
+
+// CORS middleware
+app.use(async (ctx, next) => {
+  ctx.set('Access-Control-Allow-Origin', '*');
+  ctx.set('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  ctx.set('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
+  
+  if (ctx.method === 'OPTIONS') {
+    ctx.status = 200;
+    return;
+  }
+  
+  await next();
+});
+
+// Request logging
+app.use(async (ctx, next) => {
+  console.log(`${new Date().toISOString()} - ${ctx.method} ${ctx.path}`);
+  try {
+    await next();
+  } catch (err) {
+    console.error(`Error handling ${ctx.method} ${ctx.path}:`, err);
+    throw err;
+  }
+});
+
 app.use(koaSession({ sameSite: 'none', secure: true }, app));
 
 const router = new Router();
 
-// ─── OAuth ────────────────────────────────────────────────────
-router.get('/auth', async (ctx) => {
-  const shop = ctx.query.shop;
-  const redirectUrl = await shopify.auth.beginAuth(
-    ctx.req, ctx.res, shop, '/auth/callback', false
-  );
-  ctx.redirect(redirectUrl);
-});
-router.get('/auth/callback', async (ctx) => {
-  const session = await shopify.auth.validateAuthCallback(
-    ctx.req, ctx.res, ctx.query
-  );
-  // след валидиране сесията е записана в storage
-  ctx.redirect(`/api/billing/create?shop=${session.shop}`);
-});
+// Mandatory compliance webhooks
+router.post('/webhooks/customers/data_request', async (ctx) => {
+  try {
+    const hmacHeader = ctx.get('X-Shopify-Hmac-Sha256');
+    const body = ctx.request.rawBody;
 
-// ─── CREATE BILLING SUBSCRIPTION ──────────────────────────────
-router.get('/api/billing/create', async (ctx) => {
-  // 1) взимаме ID на текущата сесия (online)
-  const sessionId = await shopify.session.getCurrentId({
-    rawRequest:  ctx.req,
-    rawResponse: ctx.res,
-    isOnline:    true
-  });
-  if (!sessionId) {
-    return ctx.redirect(`/auth?shop=${ctx.query.shop}`);
+    if (!hmacHeader || !body) {
+      console.log('Missing HMAC header or body');
+      ctx.status = 401;
+      ctx.body = 'Unauthorized';
+      return;
+    }
+
+    // Verify HMAC
+    const hash = crypto
+      .createHmac('sha256', SHOPIFY_API_SECRET)
+      .update(body, 'utf8')
+      .digest('base64');
+
+    if (hash !== hmacHeader) {
+      console.log('HMAC validation failed');
+      ctx.status = 401;
+      ctx.body = 'Unauthorized';
+      return;
+    }
+
+    console.log('Customer data request received');
+    ctx.status = 200;
+    ctx.body = { message: 'No customer data stored' };
+  } catch (error) {
+    console.error('Webhook error:', error);
+    ctx.status = 401;
+    ctx.body = 'Unauthorized';
   }
-  // 2) зареждаме сесията от storage
-  const session = await shopify.config.sessionStorage.loadSession(sessionId);
-  if (!session) throw new Error('No Shopify session found');
+});
 
+router.post('/webhooks/customers/redact', async (ctx) => {
+  try {
+    const hmacHeader = ctx.get('X-Shopify-Hmac-Sha256');
+    const body = ctx.request.rawBody;
+
+    if (!hmacHeader || !body) {
+      ctx.status = 401;
+      ctx.body = 'Unauthorized';
+      return;
+    }
+
+    const hash = crypto
+      .createHmac('sha256', SHOPIFY_API_SECRET)
+      .update(body, 'utf8')
+      .digest('base64');
+
+    if (hash !== hmacHeader) {
+      ctx.status = 401;
+      ctx.body = 'Unauthorized';
+      return;
+    }
+
+    console.log('Customer redact request received');
+    ctx.status = 200;
+    ctx.body = { message: 'No customer data to redact' };
+  } catch (error) {
+    console.error('Webhook error:', error);
+    ctx.status = 401;
+    ctx.body = 'Unauthorized';
+  }
+});
+
+router.post('/webhooks/shop/redact', async (ctx) => {
+  try {
+    const hmacHeader = ctx.get('X-Shopify-Hmac-Sha256');
+    const body = ctx.request.rawBody;
+
+    if (!hmacHeader || !body) {
+      ctx.status = 401;
+      ctx.body = 'Unauthorized';
+      return;
+    }
+
+    const hash = crypto
+      .createHmac('sha256', SHOPIFY_API_SECRET)
+      .update(body, 'utf8')
+      .digest('base64');
+
+    if (hash !== hmacHeader) {
+      ctx.status = 401;
+      ctx.body = 'Unauthorized';
+      return;
+    }
+
+    console.log('Shop redact request received');
+    ctx.status = 200;
+    ctx.body = { message: 'No shop data to redact' };
+  } catch (error) {
+    console.error('Webhook error:', error);
+    ctx.status = 401;
+    ctx.body = 'Unauthorized';
+  }
+});
+
+// Health check
+router.get('/health', async (ctx) => {
+  ctx.body = 'OK';
+});
+
+// Helper functions за Token Exchange подхода
+function getSessionTokenHeader(ctx) {
+  return ctx.headers['authorization']?.replace('Bearer ', '');
+}
+
+function getSessionTokenFromUrlParam(ctx) {
+  return ctx.query.id_token;
+}
+
+function redirectToSessionTokenBouncePage(ctx) {
+  const searchParams = new URLSearchParams(ctx.query);
+  searchParams.delete('id_token');
+  searchParams.append('shopify-reload', `${ctx.path}?${searchParams.toString()}`);
+  ctx.redirect(`/session-token-bounce?${searchParams.toString()}`);
+}
+
+// Session token bounce page
+router.get('/session-token-bounce', async (ctx) => {
+  ctx.set('Content-Type', 'text/html');
+  ctx.body = `
+    <!DOCTYPE html>
+    <html>
+      <head>
+        <meta name="shopify-api-key" content="${SHOPIFY_API_KEY}" />
+        <script src="https://cdn.shopify.com/shopifycloud/app-bridge.js"></script>
+      </head>
+      <body>Loading...</body>
+    </html>
+  `;
+});
+
+// Middleware за автентикация чрез Token Exchange
+async function authenticateRequest(ctx, next) {
+  console.log('=== AUTHENTICATING REQUEST ===');
+
+  let encodedSessionToken = null;
+  let decodedSessionToken = null;
+
+  try {
+    encodedSessionToken = getSessionTokenHeader(ctx) || getSessionTokenFromUrlParam(ctx);
+
+    if (!encodedSessionToken) {
+      console.log('No session token found');
+      const isDocumentRequest = !ctx.headers['authorization'];
+      if (isDocumentRequest) {
+        redirectToSessionTokenBouncePage(ctx);
+        return;
+      }
+
+      ctx.status = 401;
+      ctx.set('X-Shopify-Retry-Invalid-Session-Request', '1');
+      ctx.body = 'Unauthorized';
+      return;
+    }
+
+    decodedSessionToken = await shopify.session.decodeSessionToken(encodedSessionToken);
+    console.log('Session token decoded:', { dest: decodedSessionToken.dest, iss: decodedSessionToken.iss });
+
+  } catch (e) {
+    console.error('Invalid session token:', e.message);
+
+    const isDocumentRequest = !ctx.headers['authorization'];
+    if (isDocumentRequest) {
+      redirectToSessionTokenBouncePage(ctx);
+      return;
+    }
+
+    ctx.status = 401;
+    ctx.set('X-Shopify-Retry-Invalid-Session-Request', '1');
+    ctx.body = 'Unauthorized';
+    return;
+  }
+
+  const dest = new URL(decodedSessionToken.dest);
+  let shop = dest.hostname;
+
+  // Fallback: use shop from query parameter if available
+  const queryShop = ctx.query.shop;
+  if (queryShop && queryShop !== shop) {
+    console.log(`Shop mismatch: session token shop (${shop}) vs query shop (${queryShop})`);
+    // Use the shop from query parameter as it's more reliable for API calls
+    shop = queryShop;
+  }
+
+  const sessions = await memorySessionStorage.findSessionsByShop(shop);
+  let session = sessions.find(s => !s.isOnline);
+
+  if (!session || !session.accessToken || session.accessToken === 'placeholder') {
+    console.log('No valid session with access token, performing token exchange...');
+
+    try {
+      console.log('=== TOKEN EXCHANGE DEBUG ===');
+      console.log('Shop:', shop);
+      console.log('Session token length:', encodedSessionToken.length);
+      console.log('Session token starts with:', encodedSessionToken.substring(0, 20));
+      console.log('API Key set:', !!SHOPIFY_API_KEY);
+      console.log('API Secret set:', !!SHOPIFY_API_SECRET);
+      console.log('Host name:', HOST.replace('https://', ''));
+      console.log('Scopes from env:', SCOPES);
+      console.log('Scopes array:', SCOPES.split(','));
+      console.log('Shopify API scopes:', shopify.config.scopes);
+
+      console.log('About to perform token exchange...');
+      const tokenExchangeResult = await shopify.auth.tokenExchange({
+        shop: shop,
+        sessionToken: encodedSessionToken,
+      });
+
+      console.log('Token exchange successful');
+      console.log('Token exchange result:', {
+        hasAccessToken: !!tokenExchangeResult.accessToken,
+        accessTokenLength: tokenExchangeResult.accessToken?.length,
+        scope: tokenExchangeResult.scope,
+        expires: tokenExchangeResult.expires,
+        associatedUser: tokenExchangeResult.associatedUser,
+        accountOwner: tokenExchangeResult.accountOwner
+      });
+      console.log('Full token exchange result:', JSON.stringify(tokenExchangeResult, null, 2));
+
+      // Check if access token is in the session object
+      const accessToken = tokenExchangeResult.accessToken || tokenExchangeResult.session?.accessToken;
+      
+      if (!accessToken) {
+        console.error('Token exchange succeeded but no access token received');
+        console.error('This usually means:');
+        console.error('1. App is not installed in the store');
+        console.error('2. App does not have required scopes');
+        console.error('3. App is not properly configured in Partner Dashboard');
+        console.error('4. Store is not accessible');
+        ctx.status = 500;
+        ctx.body = 'Token exchange failed - no access token';
+        return;
+      }
+
+      console.log('Access token found:', accessToken.substring(0, 20) + '...');
+      console.log('Session scope:', tokenExchangeResult.session?.scope || tokenExchangeResult.scope);
+      console.log('Required scopes for billing:', 'read_customer_payment_methods,write_own_subscription_contracts');
+
+      const sessionId = `offline_${shop}`;
+      session = new Session({
+        id: sessionId,
+        shop: shop,
+        state: 'active',
+        isOnline: false,
+        accessToken: accessToken,
+        scope: tokenExchangeResult.session?.scope || tokenExchangeResult.scope,
+      });
+
+      await memorySessionStorage.storeSession(session);
+
+    } catch (error) {
+      console.error('Token exchange failed:', error);
+      console.error('Error details:', {
+        message: error.message,
+        statusCode: error.response?.statusCode,
+        body: error.response?.body,
+        headers: error.response?.headers
+      });
+
+      // Check if it's a configuration issue
+      if (error.message.includes('400 Bad Request')) {
+        console.error('Token exchange 400 error - possible causes:');
+        console.error('1. App not properly configured in Partner Dashboard');
+        console.error('2. Incorrect API key or secret');
+        console.error('3. App URL not matching configuration');
+        console.error('4. Missing required scopes');
+        console.error('5. App not installed in the store');
+      }
+
+      ctx.status = 500;
+      ctx.body = 'Token exchange failed';
+      return;
+    }
+  }
+
+  ctx.state.shop = shop;
+  ctx.state.session = session;
+
+  await next();
+}
+
+// Billing check middleware
+async function requiresSubscription(ctx, next) {
+  try {
+    const client = new shopify.clients.Graphql({
+      session: ctx.state.session,
+    });
+
+    // Check for active subscriptions
+    const response = await client.query({
+      data: `{
+        currentAppInstallation {
+          activeSubscriptions {
+            id
+            status
+            trialDays
+            createdAt
+          }
+        }
+      }`
+    });
+
+    const subscriptions = response.body.data.currentAppInstallation.activeSubscriptions || [];
+    const hasActiveSubscription = subscriptions.some(sub => sub.status === 'ACTIVE');
+
+    ctx.state.hasActiveSubscription = hasActiveSubscription;
+
+    // Always allow access to billing endpoints
+    if (ctx.path.includes('/api/billing') || ctx.path.includes('/api/subscription')) {
+      await next();
+      return;
+    }
+
+    // Check if needs subscription
+    if (!hasActiveSubscription && ctx.path !== '/') {
+      ctx.redirect('/?billing=required');
+      return;
+    }
+
+    await next();
+  } catch (error) {
+    console.error('Subscription check error:', error);
+    // Allow access on error to prevent blocking
+    await next();
+  }
+}
+
+router.get("/billing/confirm", async (ctx) => {
+  const { shop } = ctx.query;
+  // Изчистете кеша за да форсирате нова проверка
+  delete SUBSCRIPTION_CACHE[shop];
+  ctx.body = "Абонаментът е активиран! 🎉 Можеш да ползваш приложението.";
+});
+
+// Billing endpoints
+router.get('/api/billing/create', authenticateRequest, async (ctx) => {
+  const shop = ctx.query.shop;
+  const sessionId = await shopify.session.getCurrentId({
+    rawRequest: ctx.req,
+    rawResponse: ctx.res,
+    isOnline: true
+  });
+  const session = await shopify.config.sessionStorage.loadSession(sessionId);
   const client = new shopify.clients.Graphql({ session });
 
-  // GraphQL мутация за recurring charge + пробен период
+  // 1) Извикваме GraphQL мутацията
   const MUTATION = `
     mutation appSubscriptionCreate(
       $name: String!,
@@ -94,35 +517,37 @@ router.get('/api/billing/create', async (ctx) => {
     }
   `;
   const vars = {
-    name:      "Basic Plan",
+    name: "Basic Plan",
     returnUrl: `${HOST}/api/billing/callback`,
     trialDays: 5,
-    test:      process.env.NODE_ENV !== 'production'
+    test: process.env.NODE_ENV !== 'production'
   };
 
   const resp = await client.query({ data: { query: MUTATION, variables: vars } });
-  const errs = resp.body.data.appSubscriptionCreate.userErrors;
-  if (errs.length) ctx.throw(400, errs.map(e => e.message).join('; '));
+  const errors = resp.body.data.appSubscriptionCreate.userErrors;
+  if (errors.length) {
+    console.error('Billing create errors:', errors);
+    ctx.throw(400, errors.map(e => e.message).join('; '));
+  }
 
-  ctx.redirect(resp.body.data.appSubscriptionCreate.confirmationUrl);
+  // 2) Редиректваме магазина към Shopify billing modal
+  const confirmationUrl = resp.body.data.appSubscriptionCreate.confirmationUrl;
+  ctx.redirect(confirmationUrl);
 });
 
-// ─── BILLING CALLBACK ─────────────────────────────────────────
-router.get('/api/billing/callback', async (ctx) => {
-  // отново charge ID-то идва в query: ?id=<subscriptionId>
+// Billing callback endpoint
+router.get('/api/billing/callback', authenticateRequest, async (ctx) => {
+  // Shopify ще върне ?id=<subscriptionId>
   const subscriptionId = ctx.query.id;
-  // пак зареждаме сесията
   const sessionId = await shopify.session.getCurrentId({
-    rawRequest:  ctx.req,
+    rawRequest: ctx.req,
     rawResponse: ctx.res,
-    isOnline:    true
+    isOnline: true
   });
-  const session = sessionId
-    ? await shopify.config.sessionStorage.loadSession(sessionId)
-    : null;
-  if (!session) throw new Error('No Shopify session on billing callback');
-
+  const session = await shopify.config.sessionStorage.loadSession(sessionId);
   const client = new shopify.clients.Graphql({ session });
+
+  // Вадим статуса на току-що одобрената подписка
   const QUERY = `
     query getSubscription($id: ID!) {
       node(id: $id) {
@@ -135,196 +560,982 @@ router.get('/api/billing/callback', async (ctx) => {
     }
   `;
   const { body } = await client.query({ data: { query: QUERY, variables: { id: subscriptionId } } });
-  const subscription = body.data.node;
+  const sub = body.data.node;
+  console.log('New subscription:', sub);
 
-  // TODO: запиши subscription в твоята DB: shop + subscription
-  // await saveSub({ shop: session.shop, subscription });
+  // TODO: запиши `sub` в твоята база по `session.shop`
+  // await saveSubscription(session.shop, sub);
 
-  ctx.redirect(`/?billing=success`);
+  // Връщаме търговеца обратно в приложението
+  ctx.redirect(`/?shop=${session.shop}&billing=success`);
 });
 
-// ─── FALLBACK ROUTE ("/") ──────────────────────────────────────
-router.get('/', async (ctx) => {
-  // при зареждане във iframe Shopify изпраща shop query param
+// Billing callback is now handled by /auth/callback
+
+// Обновете /api/billing/status да винаги проверява реалния статус
+router.get('/api/billing/status', authenticateRequest, async (ctx) => {
   const shop = ctx.query.shop;
-  // ако няма валидна сесия, пак към /auth
-  const sessionId = await shopify.session.getCurrentId({
-    rawRequest:  ctx.req,
-    rawResponse: ctx.res,
-    isOnline:    true
-  });
-  if (!sessionId) {
-    return ctx.redirect(`/auth?shop=${shop}`);
+
+  if (!shop) {
+    ctx.status = 400;
+    ctx.body = { error: 'Missing shop parameter' };
+    return;
+  }
+
+  console.log('=== CHECKING REAL BILLING STATUS ===');
+  console.log('Shop:', shop);
+  
+  // Проверка за кеширан резултат (опционално)
+  const cached = SUBSCRIPTION_CACHE[shop];
+  if (cached && cached.timestamp > Date.now() - CACHE_DURATION) {
+    console.log('Returning cached billing status');
+    ctx.body = cached.data;
+    return;
   }
   
-  // Ако има сесия, показваме главната страница
-  ctx.type = 'html';
+  try {
+    if (!ctx.state.session?.accessToken) {
+      console.log('No access token - app not properly installed');
+      ctx.body = {
+        hasActiveSubscription: false,
+        shop: shop,
+        message: 'No access token - app not installed'
+      };
+      return;
+    }
+    
+    // ВИНАГИ проверявайте реалния статус от Shopify API
+    const billingCheckResponse = await fetch(
+      `https://${shop}/admin/api/2024-10/graphql.json`,
+      {
+        method: "POST",
+        headers: {
+          "X-Shopify-Access-Token": ctx.state.session.accessToken,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          query: `{
+            currentAppInstallation {
+              activeSubscriptions {
+                id
+                status
+                trialDays
+                createdAt
+                test
+              }
+            }
+          }`
+        }),
+      }
+    );
+
+    const billingData = await billingCheckResponse.json();
+    console.log("Real billing check response:", billingData);
+
+    // Проверка за грешки
+    if (billingData.errors) {
+      console.error('GraphQL errors:', billingData.errors);
+      ctx.body = {
+        hasActiveSubscription: false,
+        shop: shop,
+        error: 'GraphQL query error',
+        message: billingData.errors[0]?.message
+      };
+      return;
+    }
+
+    const subscriptions = billingData.data?.currentAppInstallation?.activeSubscriptions || [];
+    
+    // Филтрирайте тестови абонаменти ако сте в production
+    const activeSubscriptions = process.env.NODE_ENV === 'production' 
+      ? subscriptions.filter(sub => sub.status === 'ACTIVE' && !sub.test)
+      : subscriptions.filter(sub => sub.status === 'ACTIVE');
+    
+    const hasActiveSubscription = activeSubscriptions.length > 0;
+
+    console.log("Found subscriptions:", subscriptions);
+    console.log("Active subscriptions:", activeSubscriptions);
+    console.log("Has active subscription:", hasActiveSubscription);
+
+    const responseData = {
+      hasActiveSubscription: hasActiveSubscription,
+      shop: shop,
+      subscriptions: subscriptions,
+      activeCount: activeSubscriptions.length,
+      message: 'Real-time billing check from Shopify API'
+    };
+
+    // Кеширайте резултата
+    SUBSCRIPTION_CACHE[shop] = {
+      timestamp: Date.now(),
+      data: responseData
+    };
+
+    ctx.body = responseData;
+  } catch (error) {
+    console.error("Error checking billing status:", error);
+    ctx.body = {
+      hasActiveSubscription: false,
+      shop: shop,
+      error: error.message,
+      message: 'Error checking billing - defaulting to false'
+    };
+  }
+});
+
+// API endpoints
+router.get('/api/test', authenticateRequest, async (ctx) => {
+  console.log('=== API TEST ===');
+  ctx.body = {
+    message: 'Success! Session is valid',
+    shop: ctx.state.shop,
+    hasAccessToken: !!ctx.state.session.accessToken,
+    scope: ctx.state.session.scope
+  };
+});
+
+router.get('/api/shop', async (ctx) => {
+  console.log('=== SHOP INFO API ===');
+  const shop = ctx.query.shop;
+
+  if (!shop) {
+    ctx.status = 400;
+    ctx.body = { error: 'Missing shop parameter' };
+    return;
+  }
+
+  // For now, just return basic info without making API calls
+  // This avoids authentication issues
+  ctx.body = {
+    success: true,
+    shop: {
+      name: shop,
+      domain: shop,
+      email: 'admin@' + shop
+    }
+  };
+});
+
+router.get('/api/orders', authenticateRequest, requiresSubscription, async (ctx) => {
+  console.log('=== ORDERS API TEST ===');
+
+  try {
+    const response = await fetch(`https://${ctx.state.shop}/admin/api/2024-10/orders.json?limit=10`, {
+      headers: {
+        'X-Shopify-Access-Token': ctx.state.session.accessToken,
+        'Content-Type': 'application/json'
+      }
+    });
+
+    if (!response.ok) {
+      throw new Error(`Shopify API error: ${response.status}`);
+    }
+
+    const orders = await response.json();
+    ctx.body = {
+      success: true,
+      shop: ctx.state.shop,
+      ordersCount: orders.orders?.length || 0,
+      orders: orders.orders || []
+    };
+
+  } catch (error) {
+    console.error('Error fetching orders:', error);
+    ctx.status = 500;
+    ctx.body = 'Failed to fetch orders: ' + error.message;
+  }
+});
+
+// Премахнете локалното хранилище или го използвайте само като кеш
+let SUBSCRIPTION_CACHE = {}; // Преименувайте за яснота
+const CACHE_DURATION = 5 * 60 * 1000; // 5 минути кеш
+
+router.get('/auth', async (ctx) => {
+  const shop = ctx.query.shop;
+  const authRoute = await shopify.auth.begin({
+    shop,
+    callbackPath: '/auth/callback',
+    isOnline: true,
+    rawRequest: ctx.req,
+    rawResponse: ctx.res,
+  });
+  ctx.redirect(authRoute);
+});
+
+router.get("/auth/callback", async (ctx) => {
+  const session = await shopify.auth.callback({
+    rawRequest: ctx.req,
+    rawResponse: ctx.res,
+  });
+  ctx.redirect(`/api/billing/create?shop=${session.shop}`);
+});
+
+// Добавете webhook за деинсталиране на приложението
+router.post('/webhooks/app/uninstalled', async (ctx) => {
+  try {
+    const hmacHeader = ctx.get('X-Shopify-Hmac-Sha256');
+    const body = ctx.request.rawBody;
+
+    // Verify HMAC
+    const hash = crypto
+      .createHmac('sha256', SHOPIFY_API_SECRET)
+      .update(body, 'utf8')
+      .digest('base64');
+
+    if (hash !== hmacHeader) {
+      ctx.status = 401;
+      ctx.body = 'Unauthorized';
+      return;
+    }
+
+    const data = JSON.parse(body);
+    const shop = data.shop_domain || data.shop;
+    
+    console.log('App uninstalled from shop:', shop);
+    
+    // Изчистете всички данни за този магазин
+    delete SUBSCRIPTION_CACHE[shop];
+    
+    // Изтрийте сесиите
+    const sessions = await memorySessionStorage.findSessionsByShop(shop);
+    for (const session of sessions) {
+      await memorySessionStorage.deleteSession(session.id);
+    }
+    
+    ctx.status = 200;
+    ctx.body = { message: 'Uninstall webhook processed' };
+  } catch (error) {
+    console.error('Uninstall webhook error:', error);
+    ctx.status = 500;
+    ctx.body = 'Internal server error';
+  }
+});
+
+// Main app route
+router.get('(/)', async (ctx) => {
+  console.log('=== MAIN ROUTE ===');
+  const shop = ctx.query.shop; // Използваме shop от query параметър
+  const host = ctx.query.host;
+
+  if (!shop) {
+    ctx.body = "Missing shop parameter. Please install the app through Shopify.";
+    ctx.status = 400;
+    return;
+  }
+
+  // НЕ проверявайте локално хранилище тук
+  // Оставете клиентския код да провери чрез API
+  
+  const { billing, checkBilling } = ctx.query;
+  if (billing === 'success') {
+    console.log('Billing success callback received');
+    // Изчистете кеша за да форсирате нова проверка
+    delete SUBSCRIPTION_CACHE[shop];
+  }
+
+  // Вашият HTML остава същият...
+
+  ctx.set('Content-Type', 'text/html');
   ctx.body = `
-    <!DOCTYPE html>
-    <html>
-      <head>
-        <meta charset="utf-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1">
-        <title>BGN/EUR Price Display</title>
-        <meta name="shopify-api-key" content="${SHOPIFY_API_KEY}" />
-        <script src="https://cdn.shopify.com/shopifycloud/app-bridge.js"></script>
-        <style>
-          body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            margin: 0;
-            padding: 20px;
-            background: #fafafa;
-            color: #202223;
-          }
-          .container {
-            max-width: 900px;
-            margin: 0 auto;
-            background: white;
-            border-radius: 8px;
-            padding: 40px;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-          }
-          .header {
-            text-align: center;
-            margin-bottom: 40px;
-          }
-          .header h1 {
-            margin: 0 0 12px 0;
-            font-size: 32px;
-            font-weight: 500;
-            color: #202223;
-          }
-          .header p {
-            color: #616161;
-            margin: 0;
-            font-size: 16px;
-            line-height: 1.5;
-          }
-          .success-badge {
-            display: inline-block;
-            background: #108043;
-            color: white;
-            padding: 4px 12px;
-            border-radius: 4px;
-            font-size: 12px;
-            margin-left: 8px;
-          }
-          .card {
-            background: #f9fafb;
-            border: 1px solid #e1e3e5;
-            border-radius: 8px;
-            padding: 24px;
-            margin-bottom: 24px;
-          }
-          .card h2 {
-            margin: 0 0 16px 0;
-            font-size: 20px;
-            font-weight: 500;
-            color: #202223;
-          }
-          .steps {
-            counter-reset: step-counter;
-            list-style: none;
-            padding: 0;
-            margin: 0;
-          }
-          .steps li {
-            margin-bottom: 20px;
-            padding-left: 48px;
-            position: relative;
-            counter-increment: step-counter;
-            line-height: 1.6;
-          }
-          .steps li::before {
-            content: counter(step-counter);
-            position: absolute;
-            left: 0;
-            top: 2px;
-            width: 32px;
-            height: 32px;
-            background: #f3f4f6;
-            color: #202223;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-weight: 500;
-            font-size: 14px;
-          }
-          .big-button {
-            display: inline-block;
-            padding: 12px 24px;
-            background: #202223;
-            color: white;
-            text-decoration: none;
-            border-radius: 6px;
-            font-weight: 500;
-            font-size: 15px;
-            transition: all 0.2s;
-          }
-          .big-button:hover {
-            background: #000;
-            transform: translateY(-1px);
-          }
-          .footer {
-            text-align: center;
-            color: #616161;
-            font-size: 14px;
-            margin-top: 40px;
-            line-height: 1.6;
-          }
-        </style>
-      </head>
-      <body>
-        <div class="container">
-          <div class="header">
-            <h1>BGN/EUR Price Display</h1>
-            <p>Показвайте цените в лева и евро на Thank You страницата</p>
-            <span class="success-badge">✓ Активно</span>
-          </div>
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>BGN/EUR Price Display</title>
+  <meta name="shopify-api-key" content="${SHOPIFY_API_KEY}" />
+  <script src="https://cdn.shopify.com/shopifycloud/app-bridge.js"></script>
+  <script>
+    // Initialize App Bridge
+    document.addEventListener('DOMContentLoaded', function() {
+      if (window.shopify && window.shopify.config) {
+        console.log('App Bridge initialized');
+      } else {
+        console.log('App Bridge not available');
+      }
+    });
+  </script>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      margin: 0;
+      padding: 0;
+      background: #fafafa;
+      color: #202223;
+    }
+    .container {
+      max-width: 900px;
+      margin: 0 auto;
+      padding: 20px;
+    }
+    .header {
+      background: white;
+      border-radius: 8px;
+      padding: 40px;
+      text-align: center;
+      margin-bottom: 24px;
+      border: 1px solid #e1e3e5;
+    }
+    .header h1 {
+      margin: 0 0 12px 0;
+      font-size: 32px;
+      font-weight: 500;
+      color: #202223;
+    }
+    .header p {
+      color: #616161;
+      margin: 0;
+      font-size: 16px;
+      line-height: 1.5;
+    }
+    .card {
+      background: white;
+      border-radius: 8px;
+      padding: 32px;
+      margin-bottom: 24px;
+      border: 1px solid #e1e3e5;
+    }
+    .card h2 {
+      margin: 0 0 24px 0;
+      font-size: 24px;
+      font-weight: 500;
+      color: #202223;
+    }
+    .tabs {
+      display: flex;
+      gap: 32px;
+      margin-bottom: 0;
+      background: white;
+      border-radius: 8px 8px 0 0;
+      padding: 0 32px;
+      border: 1px solid #e1e3e5;
+      border-bottom: none;
+    }
+    .tab {
+      padding: 20px 0;
+      background: none;
+      border: none;
+      font-size: 15px;
+      font-weight: 400;
+      color: #616161;
+      cursor: pointer;
+      position: relative;
+      transition: color 0.2s;
+    }
+    .tab:hover {
+      color: #202223;
+    }
+    .tab.active {
+      color: #202223;
+      font-weight: 500;
+    }
+    .tab.active::after {
+      content: '';
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      height: 2px;
+      background: #202223;
+    }
+    .tab-content {
+      display: none;
+      animation: fadeIn 0.3s;
+    }
+    .tab-content.active {
+      display: block;
+    }
+    @keyframes fadeIn {
+      from { opacity: 0; }
+      to { opacity: 1; }
+    }
+    .quick-action {
+      background: white;
+      border: 1px solid #e1e3e5;
+      border-radius: 8px;
+      padding: 32px;
+      text-align: center;
+      margin-bottom: 24px;
+    }
+    .quick-action h3 {
+      margin: 0 0 12px 0;
+      font-size: 20px;
+      font-weight: 500;
+      color: #202223;
+    }
+    .big-button {
+      display: inline-block;
+      padding: 12px 24px;
+      background: #202223;
+      color: white;
+      text-decoration: none;
+      border-radius: 6px;
+      font-weight: 500;
+      font-size: 15px;
+      transition: all 0.2s;
+    }
+    .big-button:hover {
+      background: #000;
+      transform: translateY(-1px);
+    }
+    .steps {
+      counter-reset: step-counter;
+      list-style: none;
+      padding: 0;
+      margin: 0;
+    }
+    .steps li {
+      margin-bottom: 20px;
+      padding-left: 48px;
+      position: relative;
+      counter-increment: step-counter;
+      line-height: 1.6;
+    }
+    .steps li::before {
+      content: counter(step-counter);
+      position: absolute;
+      left: 0;
+      top: 2px;
+      width: 32px;
+      height: 32px;
+      background: #f3f4f6;
+      color: #202223;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 500;
+      font-size: 14px;
+    }
+    .feature-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+      gap: 24px;
+      margin-top: 24px;
+    }
+    .feature {
+      padding: 20px 0;
+      border-bottom: 1px solid #f3f4f6;
+    }
+    .feature:last-child {
+      border-bottom: none;
+    }
+    .feature-text h3 {
+      margin: 0 0 8px 0;
+      font-size: 16px;
+      font-weight: 500;
+      color: #202223;
+    }
+    .feature-text p {
+      margin: 0;
+      color: #616161;
+      font-size: 14px;
+      line-height: 1.5;
+    }
+    .badge {
+      display: inline-block;
+      padding: 4px 12px;
+      background: #f3f4f6;
+      border-radius: 4px;
+      font-size: 12px;
+      font-weight: 500;
+      color: #616161;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    .badge.new {
+      background: #202223;
+      color: white;
+    }
+    .warning {
+      background: #f9fafb;
+      border: 1px solid #e1e3e5;
+      border-radius: 6px;
+      padding: 20px;
+      margin: 24px 0;
+      line-height: 1.6;
+    }
+    .button {
+      display: inline-block;
+      padding: 10px 20px;
+      background: #202223;
+      color: white;
+      text-decoration: none;
+      border-radius: 6px;
+      font-weight: 500;
+      margin-top: 16px;
+      transition: background 0.2s;
+    }
+    .button:hover {
+      background: #000;
+    }
+    .footer {
+      text-align: center;
+      color: #616161;
+      font-size: 14px;
+      margin-top: 40px;
+      line-height: 1.6;
+    }
+    code {
+      background: #f3f4f6;
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-family: monospace;
+      font-size: 14px;
+    }
+    .loading {
+      text-align: center;
+      padding: 40px;
+      color: #666;
+      display: none;
+    }
+    .success-badge {
+      display: inline-block;
+      background: #108043;
+      color: white;
+      padding: 4px 12px;
+      border-radius: 4px;
+      font-size: 12px;
+      margin-left: 8px;
+    }
+    ul {
+      line-height: 1.8;
+    }
+    strong {
+      font-weight: 500;
+      color: #202223;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>BGN/EUR Price Display</h1>
+      <p>Показвайте цените в лева и евро на Thank You страницата</p>
+      <div class="loading" id="loading">Зареждане...</div>
+      <span id="status-badge" style="display: none;" class="success-badge">✓ Активно</span>
+    </div>
 
-          <div class="card">
-            <h2>Инструкции за инсталация</h2>
-            <ol class="steps">
-              <li>
-                <strong>Отидете в Theme Customizer</strong><br>
-                <span style="color: #616161;">Online Store → Themes → Customize</span>
-              </li>
-              <li>
-                <strong>Навигирайте до Thank You страницата</strong><br>
-                <span style="color: #616161;">Settings → Checkout → Thank you page</span>
-              </li>
-              <li>
-                <strong>Добавете приложението</strong><br>
-                <span style="color: #616161;">Add block → Apps → BGN EUR Price Display</span>
-              </li>
-              <li>
-                <strong>Запазете промените</strong><br>
-                <span style="color: #616161;">Кликнете Save в горния десен ъгъл</span>
-              </li>
-            </ol>
-          </div>
+    <div class="quick-action">
+      <h3>Бърз старт</h3>
+      <p style="margin-bottom: 20px;">Инсталирайте extension-а с едно кликване:</p>
+      <a href="https://${shop}/admin/themes/current/editor?context=checkout&template=checkout" 
+         class="big-button" 
+         target="_blank">
+        Отвори Theme Editor
+      </a>
+    </div>
 
-          <div class="card">
-            <h2>Бърз старт</h2>
-            <p style="margin-bottom: 20px;">Инсталирайте extension-а с едно кликване:</p>
-            <a href="https://${shop}/admin/themes/current/editor?context=checkout&template=checkout" 
-               class="big-button" 
-               target="_blank">
-              Отвори Theme Editor
-            </a>
-          </div>
+    <div class="tabs">
+      <button class="tab active" onclick="showTab('installation')">Инсталация</button>
+      <button class="tab" onclick="showTab('features')">Функции</button>
+      <button class="tab" onclick="showTab('tips')">Съвети</button>
+    </div>
 
-          <div class="footer">
-            <p>BGN/EUR Prices Display v1.0 • Създадено за български онлайн магазини</p>
-            <p style="margin-top: 8px;">Нужда от помощ? Свържете се с нас на emarketingbg@gmail.com</p>
+    <div class="card">
+      <div id="installation" class="tab-content active">
+        <h2>Инструкции за инсталация</h2>
+        <ol class="steps">
+          <li>
+            <strong>Отидете в Theme Customizer</strong><br>
+            <span style="color: #616161;">Online Store → Themes → Customize</span>
+          </li>
+          <li>
+            <strong>Навигирайте до Thank You страницата</strong><br>
+            <span style="color: #616161;">Settings → Checkout → Thank you page</span>
+          </li>
+          <li>
+            <strong>Добавете приложението</strong><br>
+            <span style="color: #616161;">Add block → Apps → BGN EUR Price Display</span>
+          </li>
+          <li>
+            <strong>Запазете промените</strong><br>
+            <span style="color: #616161;">Кликнете Save в горния десен ъгъл</span>
+          </li>
+        </ol>
+      </div>
+
+      <div id="features" class="tab-content">
+        <h2>Как работи</h2>
+        <div class="feature-grid">
+          <div class="feature">
+            <div class="feature-text">
+              <h3>Двойно показване</h3>
+              <p>Всички цени се показват едновременно в BGN и EUR, изчислени по фиксиран курс 1 EUR = 1.95583 BGN</p>
+            </div>
+          </div>
+          <div class="feature">
+            <div class="feature-text">
+              <h3>Автоматично преминаване към EUR</h3>
+              <p>След 01.01.2026 г. когато смените валутата на магазина (или на пазара България)  на евро, приложението автоматично ще показва EUR като основна валута и BGN като референтна.</p>
+            </div>
+          </div>
+          <div class="feature">
+            <div class="feature-text">
+              <h3>Пълна разбивка</h3>
+              <p>Включва всички елементи на поръчката - продукти, доставка и обща сума</p>
+            </div>
           </div>
         </div>
-      </body>
-    </html>
+        
+        <div class="warning">
+          <div>
+            <strong>Важно:</strong> В настройките на магазина трябва да имате България като отделен пазар. Цените в BGN/EUR се показват само за поръчки в български лева (BGN) с адрес на доставка в България.
+          </div>
+        </div>
+      </div>
+
+      <div id="tips" class="tab-content">
+        <h2>Полезни съвети</h2>
+        <ul style="margin: 0; padding-left: 20px;">
+          <li>Уверете се, че валутата на магазина е настроена на BGN</li>
+          <li>Тествайте с реална поръчка за да видите как изглежда</li>
+          <li>При проблеми, опитайте да деинсталирате и инсталирате отново</li>
+          <li>Проверете дали extension-а е активен в Theme Customizer</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="footer">
+      <p>BGN/EUR Prices Display v1.0 • Създадено за български онлайн магазини</p>
+      <p style="margin-top: 8px;">Нужда от помощ? Свържете се с нас на emarketingbg@gmail.com</p>
+    </div>
+  </div>
+  
+  <script>
+    let billingStatus = null;
+    
+         async function loadAppData() {
+       console.log('loadAppData called');
+       try {
+         const url = '/api/shop?shop=${shop}';
+         console.log('Fetching:', url);
+         const response = await fetch(url);
+         console.log('Response status:', response.status);
+         console.log('Response ok:', response.ok);
+         
+         if (response.ok) {
+           const data = await response.json();
+           console.log('Shop data loaded:', data);
+           document.getElementById('loading').style.display = 'none';
+           document.getElementById('status-badge').style.display = 'inline-block';
+           
+           // Check billing status
+           checkBillingStatus();
+         } else {
+           console.error('Failed to load shop data, status:', response.status);
+           const errorText = await response.text();
+           console.error('Error response:', errorText);
+           document.getElementById('loading').innerHTML = 'Грешка при зареждане';
+         }
+       } catch (error) {
+         console.error('Error loading app data:', error);
+         document.getElementById('loading').innerHTML = 'Грешка при зареждане';
+       }
+     }
+    
+         async function checkBillingStatus() {
+       console.log('=== CHECK BILLING STATUS CALLED ===');
+       console.log('Shop:', '${shop}');
+       console.log('Current time:', new Date().toISOString());
+       try {
+         const url = '/api/billing/status?shop=${shop}';
+         console.log('Fetching billing status:', url);
+         const response = await fetch(url);
+         console.log('Billing response status:', response.status);
+         console.log('Billing response ok:', response.ok);
+         
+         if (response.ok) {
+           const data = await response.json();
+           billingStatus = data.hasActiveSubscription;
+           console.log('=== BILLING STATUS CHECK ===');
+           console.log('Full billing response:', data);
+           console.log('Has active subscription:', billingStatus);
+           console.log('Shop:', data.shop);
+           console.log('Message:', data.message);
+           console.log('Subscriptions:', data.subscriptions);
+           console.log('========================');
+           if (!billingStatus) {
+             console.log('Billing status is false - showing billing prompt');
+             showBillingPrompt();
+           } else {
+             console.log('Billing status is true - subscription is active');
+           }
+         } else {
+           console.error('Failed to check billing status, status:', response.status);
+           const errorText = await response.text();
+           console.error('Billing error response:', errorText);
+         }
+       } catch (error) {
+         console.error('Error checking billing:', error);
+       }
+     }
+    
+    function showBillingPrompt() {
+      console.log('=== SHOWING BILLING PROMPT ===');
+      console.log('Billing status is false - showing prompt');
+      const billingPrompt = \`
+        <div style="background: #fff3cd; border: 2px solid #ffc107; border-radius: 8px; padding: 24px; margin-bottom: 24px; text-align: center;">
+          <h3 style="margin: 0 0 16px 0; color: #856404;">🎁 Започнете 5-дневен безплатен пробен период</h3>
+          <p style="margin: 0 0 20px 0; color: #856404;">
+            След пробния период: $14.99/месец<br>
+            Можете да отмените по всяко време
+          </p>
+          <button onclick="startBilling()" class="big-button" style="background: #ffc107; color: #212529;">
+            Започни безплатен пробен период
+          </button>
+          <br><br>
+          <a href="/api/billing/create?shop=${shop}" class="big-button" style="background: #28a745; color: white; text-decoration: none; display: inline-block; margin-top: 10px;">
+            Директно стартиране на абонамент
+          </a>
+        </div>
+      \`;
+      
+      // Insert billing prompt before main content
+      const container = document.querySelector('.container');
+      const header = document.querySelector('.header');
+      header.insertAdjacentHTML('afterend', billingPrompt);
+      
+      // Hide main functionality
+      document.querySelector('.quick-action').style.opacity = '0.5';
+      document.querySelector('.quick-action').style.pointerEvents = 'none';
+    }
+    
+    async function startBilling() {
+      try {
+        // Try different methods to get session token
+        let sessionToken = null;
+        
+        // Method 1: Try App Bridge config
+        if (window.shopify?.config?.sessionToken) {
+          sessionToken = window.shopify.config.sessionToken;
+        }
+        // Method 2: Try App Bridge session
+        else if (window.shopify?.session?.token) {
+          sessionToken = window.shopify.session.token;
+        }
+        // Method 3: Try to get from URL parameter
+        else {
+          const urlParams = new URLSearchParams(window.location.search);
+          sessionToken = urlParams.get('id_token');
+        }
+        
+        // Method 4: Try to get from URL hash (for embedded apps)
+        if (!sessionToken) {
+          const hashParams = new URLSearchParams(window.location.hash.substring(1));
+          sessionToken = hashParams.get('id_token');
+        }
+        
+        // Method 5: Try to get from parent window (for embedded apps)
+        if (!sessionToken && window.location !== window.parent.location) {
+          try {
+            const parentParams = new URLSearchParams(window.parent.location.search);
+            sessionToken = parentParams.get('id_token');
+          } catch (e) {
+            console.log('Cannot access parent window:', e.message);
+          }
+        }
+        
+        if (!sessionToken) {
+          console.error('No session token found. Available:', {
+            shopifyConfig: !!window.shopify?.config,
+            shopifySession: !!window.shopify?.session,
+            urlParams: window.location.search
+          });
+          alert('Грешка: Няма session token. Моля опитайте отново.');
+          return;
+        }
+
+        console.log('Using session token:', sessionToken.substring(0, 20) + '...');
+
+        const response = await fetch('/api/billing/create?shop=${shop}', {
+          headers: {
+            'Authorization': 'Bearer ' + sessionToken,
+            'Content-Type': 'application/json'
+          }
+        });
+        
+        if (!response.ok) {
+          console.error('HTTP ' + response.status + ': ' + response.statusText);
+          throw new Error('HTTP ' + response.status + ': ' + response.statusText);
+        }
+        
+        const data = await response.json();
+        console.log('Billing data:', data);
+        if (data.confirmationUrl) {
+          // Redirect to Shopify billing page
+          window.top.location.href = data.confirmationUrl;
+        } else {
+          alert('Грешка при стартиране на пробен период. Моля опитайте отново.');
+        }
+      } catch (error) {
+        console.error('Billing error:', error);
+        alert('Грешка при стартиране на пробен период. Моля опитайте отново.');
+      }
+    }
+    
+    function showTab(tabName) {
+      // Hide all tabs
+      document.querySelectorAll('.tab-content').forEach(content => {
+        content.classList.remove('active');
+      });
+      document.querySelectorAll('.tab').forEach(tab => {
+        tab.classList.remove('active');
+      });
+      
+      // Show selected tab
+      document.getElementById(tabName).classList.add('active');
+      event.target.classList.add('active');
+    }
+    
+    // Check URL parameters for billing status
+    const urlParams = new URLSearchParams(window.location.search);
+    if (urlParams.get('billing') === 'success') {
+      alert('🎉 Успешно активирахте плана! Вече можете да използвате всички функции.');
+    } else if (urlParams.get('billing') === 'declined') {
+      alert('❌ Плащането беше отказано. Моля опитайте отново.');
+    }
+    
+    // Debug function to check App Bridge status
+    function debugAppBridge() {
+      console.log('=== APP BRIDGE DEBUG ===');
+      console.log('window.shopify:', !!window.shopify);
+      console.log('window.shopify.config:', !!window.shopify?.config);
+      console.log('window.shopify.session:', !!window.shopify?.session);
+      console.log('URL params:', window.location.search);
+      console.log('Is embedded:', window.location !== window.parent.location);
+      console.log('========================');
+    }
+    
+    // Check App Bridge status after a delay
+    setTimeout(debugAppBridge, 2000);
+    setTimeout(loadAppData, 1000);
+  </script>
+</body>
+</html>
   `;
+});
+
+// Debug route
+router.get('/debug', async (ctx) => {
+  const allSessions = [];
+  for (const [id, session] of memorySessionStorage.storage) {
+    allSessions.push({
+      id: id,
+      shop: session.shop,
+      isOnline: session.isOnline,
+      hasToken: !!session.accessToken && session.accessToken !== 'placeholder'
+    });
+  }
+
+  ctx.body = {
+    message: 'Debug info',
+    timestamp: new Date().toISOString(),
+    environment: {
+      nodeVersion: process.version,
+      hasShopifyKey: !!SHOPIFY_API_KEY,
+      scopes: SCOPES,
+      host: HOST
+    },
+    sessions: allSessions,
+    queryShop: ctx.query.shop
+  };
+});
+
+// Check app installation
+router.get('/api/check-installation', authenticateRequest, async (ctx) => {
+  const shop = ctx.query.shop;
+  
+  if (!shop) {
+    ctx.status = 400;
+    ctx.body = { error: 'Missing shop parameter' };
+    return;
+  }
+
+  try {
+    console.log('=== CHECKING APP INSTALLATION ===');
+    console.log('Shop:', shop);
+    console.log('Session access token length:', ctx.state.session.accessToken?.length);
+
+    // Try to get app installation info
+    const response = await fetch(`https://${shop}/admin/api/2024-10/app_installations.json`, {
+      headers: {
+        'X-Shopify-Access-Token': ctx.state.session.accessToken,
+        'Content-Type': 'application/json'
+      }
+    });
+
+    const responseText = await response.text();
+    console.log('Installation check response:', {
+      status: response.status,
+      statusText: response.statusText,
+      body: responseText.substring(0, 500)
+    });
+
+    ctx.body = {
+      shop: shop,
+      installationCheck: {
+        status: response.status,
+        statusText: response.statusText,
+        hasAccessToken: !!ctx.state.session.accessToken,
+        accessTokenLength: ctx.state.session.accessToken?.length,
+        responseBody: responseText.substring(0, 500)
+      }
+    };
+  } catch (error) {
+    console.error('Installation check error:', error);
+    ctx.body = {
+      shop: shop,
+      installationCheck: {
+        error: error.message,
+        hasAccessToken: !!ctx.state.session.accessToken,
+        accessTokenLength: ctx.state.session.accessToken?.length
+      }
+    };
+  }
 });
 
 app.use(router.routes());
 app.use(router.allowedMethods());
-app.listen(PORT, () => console.log(`> App listening on port ${PORT}`));
+
+const PORT = process.env.PORT || 3000;
+
+// Функция за регистриране на webhooks
+async function registerWebhooks(shop, accessToken) {
+  try {
+    const webhook = {
+      webhook: {
+        topic: 'app/uninstalled',
+        address: `${HOST}/webhooks/app/uninstalled`,
+        format: 'json'
+      }
+    };
+    
+    const response = await fetch(`https://${shop}/admin/api/2024-10/webhooks.json`, {
+      method: 'POST',
+      headers: {
+        'X-Shopify-Access-Token': accessToken,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(webhook)
+    });
+    
+    if (response.ok) {
+      console.log('Webhook registered successfully for shop:', shop);
+    } else {
+      console.error('Failed to register webhook for shop:', shop);
+    }
+  } catch (error) {
+    console.error('Error registering webhook:', error);
+  }
+}
+
+app.listen(PORT, '0.0.0.0', function () {
+  console.log(`✓ Server listening on port ${PORT}`);
+  console.log(`✓ Using Token Exchange authentication (Shopify managed install)`);
+  console.log(`✓ App URL: ${HOST}`);
+  console.log(`✓ Webhook endpoint: ${HOST}/webhooks/app/uninstalled`);
+}).on('error', (err) => {
+  console.error('FATAL: Server failed to start:', err);
+  process.exit(1);
+});
