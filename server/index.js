@@ -375,10 +375,17 @@ router.get('/api/billing/create', authenticateRequest, async (ctx) => {
       
       // Fallback to Managed Pricing approach
       const appHandle = process.env.SHOPIFY_APP_HANDLE || 'bgn-eur-price-display';
-      const confirmationUrl = `https://admin.shopify.com/store/${shop.replace('.myshopify.com', '')}/charges/${appHandle}/pricing_plans`;
+      const shopDomain = shop.replace('.myshopify.com', '');
+      const confirmationUrl = `https://admin.shopify.com/store/${shopDomain}/charges/${appHandle}/pricing_plans`;
       
+      console.log('App handle:', appHandle);
+      console.log('Shop domain:', shopDomain);
       console.log('Managed Pricing URL:', confirmationUrl);
-      ctx.body = { confirmationUrl };
+      
+      ctx.body = { 
+        confirmationUrl,
+        type: 'managed_pricing'
+      };
       return;
     }
 
@@ -633,8 +640,6 @@ router.get('/api/billing/debug', authenticateRequest, async (ctx) => {
           title
           handle
           developerName
-          pricingDetails
-          pricingDetailsSummary
           requestedAccessScopes {
             handle
           }
@@ -684,40 +689,17 @@ router.get('/api/billing/debug', authenticateRequest, async (ctx) => {
 
     const result = await response.json();
     
-    // Also check what Shopify thinks about our app's capabilities
-    const capabilitiesQuery = `{
-      app {
-        id
-        title
-        handle
-        pricingDetails
-        requestedAccessScopes {
-          handle
-        }
-      }
-    }`;
-    
-    const capResponse = await fetch(`https://${shop}/admin/api/2024-10/graphql.json`, {
-      method: 'POST',
-      headers: {
-        'X-Shopify-Access-Token': session.accessToken,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ query: capabilitiesQuery })
-    });
-    
-    const capResult = await capResponse.json();
-    
     ctx.body = {
       shop: shop,
       hasAccessToken: !!session.accessToken,
       sessionType: session.isOnline ? 'online' : 'offline',
-      scopes: session.scope,
+      currentScopes: session.scope,
+      requiredScopes: 'write_own_subscription_contracts,read_customer_payment_methods',
+      missingBillingScopes: !session.scope?.includes('write_own_subscription_contracts'),
       configuredScopes: SCOPES,
       apiVersion: LATEST_API_VERSION,
       appInstallation: result.data?.currentAppInstallation,
-      appCapabilities: capResult.data?.app,
-      graphqlErrors: result.errors || capResult.errors,
+      graphqlErrors: result.errors,
       debugInfo: {
         nodeEnv: process.env.NODE_ENV,
         appHandle: process.env.SHOPIFY_APP_HANDLE,
@@ -1446,10 +1428,20 @@ router.get('(/)', async (ctx) => {
         
         const data = await response.json();
         console.log('Billing response:', data);
+        console.log('Confirmation URL:', data.confirmationUrl);
+        console.log('Billing type:', data.type);
         
         if (data.confirmationUrl) {
-          // Redirect to Shopify billing confirmation page
-          window.top.location.href = data.confirmationUrl;
+          console.log('Redirecting to:', data.confirmationUrl);
+          
+          // For managed pricing, we need to redirect differently
+          if (data.type === 'managed_pricing') {
+            // Open in parent window/tab
+            window.open(data.confirmationUrl, '_parent');
+          } else {
+            // Regular redirect for Billing API
+            window.top.location.href = data.confirmationUrl;
+          }
         } else {
           alert('Грешка при получаване на URL за потвърждение.');
         }
