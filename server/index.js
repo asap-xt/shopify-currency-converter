@@ -296,7 +296,7 @@ async function authenticateRequest(ctx, next) {
   await next();
 }
 
-// Billing API endpoints
+// Billing API endpoints - with fallback to Managed Pricing
 router.get('/api/billing/create', authenticateRequest, async (ctx) => {
   try {
     const shop = ctx.state.shop;
@@ -312,7 +312,7 @@ router.get('/api/billing/create', authenticateRequest, async (ctx) => {
     console.log('Shop:', shop);
     console.log('Has access token:', !!session.accessToken);
 
-    // Create subscription using GraphQL mutation
+    // First try Billing API
     const mutation = `
       mutation CreateSubscription($name: String!, $lineItems: [AppSubscriptionLineItemInput!]!, $returnUrl: URL!) {
         appSubscriptionCreate(
@@ -364,12 +364,30 @@ router.get('/api/billing/create', authenticateRequest, async (ctx) => {
     const result = await response.json();
     console.log('Billing create response:', JSON.stringify(result, null, 2));
 
-    if (result.data?.appSubscriptionCreate?.userErrors?.length > 0) {
-      console.error('Billing create errors:', result.data.appSubscriptionCreate.userErrors);
+    // Check if it's a Managed Pricing error
+    const errors = result.data?.appSubscriptionCreate?.userErrors || [];
+    const isManagedPricingError = errors.some(e => 
+      e.message?.includes('Managed Pricing Apps cannot use the Billing API')
+    );
+
+    if (isManagedPricingError) {
+      console.log('App is configured as Managed Pricing, using fallback...');
+      
+      // Fallback to Managed Pricing approach
+      const appHandle = process.env.SHOPIFY_APP_HANDLE || 'bgn-eur-price-display';
+      const confirmationUrl = `https://admin.shopify.com/store/${shop.replace('.myshopify.com', '')}/charges/${appHandle}/pricing_plans`;
+      
+      console.log('Managed Pricing URL:', confirmationUrl);
+      ctx.body = { confirmationUrl };
+      return;
+    }
+
+    if (errors.length > 0) {
+      console.error('Billing create errors:', errors);
       ctx.status = 400;
       ctx.body = { 
         error: 'Failed to create subscription',
-        details: result.data.appSubscriptionCreate.userErrors
+        details: errors
       };
       return;
     }
@@ -600,25 +618,57 @@ router.get('/auth/callback', async (ctx) => {
   }
 });
 
-// Debug billing configuration
+// Debug billing configuration - enhanced
 router.get('/api/billing/debug', authenticateRequest, async (ctx) => {
   try {
     const shop = ctx.state.shop;
     const session = ctx.state.session;
     
-    // Check current app installation
+    // Check current app installation and capabilities
     const query = `{
       currentAppInstallation {
         id
         app {
           id
           title
-          pricingPlans
+          handle
+          developerName
+          pricingDetails
+          pricingDetailsSummary
+          requestedAccessScopes {
+            handle
+          }
         }
         activeSubscriptions {
           id
           status
           name
+          test
+          lineItems {
+            id
+            plan {
+              pricingDetails {
+                ... on AppRecurringPricing {
+                  price {
+                    amount
+                    currencyCode
+                  }
+                  interval
+                }
+              }
+            }
+          }
+        }
+        allSubscriptions(first: 5) {
+          edges {
+            node {
+              id
+              status
+              name
+              test
+              createdAt
+            }
+          }
         }
       }
     }`;
@@ -634,6 +684,30 @@ router.get('/api/billing/debug', authenticateRequest, async (ctx) => {
 
     const result = await response.json();
     
+    // Also check what Shopify thinks about our app's capabilities
+    const capabilitiesQuery = `{
+      app {
+        id
+        title
+        handle
+        pricingDetails
+        requestedAccessScopes {
+          handle
+        }
+      }
+    }`;
+    
+    const capResponse = await fetch(`https://${shop}/admin/api/2024-10/graphql.json`, {
+      method: 'POST',
+      headers: {
+        'X-Shopify-Access-Token': session.accessToken,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ query: capabilitiesQuery })
+    });
+    
+    const capResult = await capResponse.json();
+    
     ctx.body = {
       shop: shop,
       hasAccessToken: !!session.accessToken,
@@ -642,7 +716,13 @@ router.get('/api/billing/debug', authenticateRequest, async (ctx) => {
       configuredScopes: SCOPES,
       apiVersion: LATEST_API_VERSION,
       appInstallation: result.data?.currentAppInstallation,
-      errors: result.errors
+      appCapabilities: capResult.data?.app,
+      graphqlErrors: result.errors || capResult.errors,
+      debugInfo: {
+        nodeEnv: process.env.NODE_ENV,
+        appHandle: process.env.SHOPIFY_APP_HANDLE,
+        host: HOST
+      }
     };
   } catch (error) {
     console.error('Debug error:', error);
