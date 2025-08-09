@@ -1,0 +1,22 @@
+# extensions/order-status-ui/orderstatus.ui.extension.toml
+
+api_version = "2024-07"
+type = "ui_extension"
+name = "BGN EUR Order Status Display"
+handle = "bgn-eur-order-status"
+
+targeting = [
+  { target = "customer-account.order-status.block.render", module = "./src/OrderStatus.jsx" }
+]
+
+[capabilities]
+api_access = true
+block_progress = false
+
+[settings]
+[[settings.fields]]
+key = "show_rate_info"
+type = "boolean"
+name = "Show exchange rate info"
+description = "Display the current EUR/BGN exchange rate"
+default = true
