@@ -2,7 +2,7 @@
 
 api_version = "2024-07"
 type = "ui_extension"
-name = "BGN EUR Order Status Display"
+name = "BGN EUR Order Status"
 handle = "bgn-eur-order-status"
 
 targeting = [

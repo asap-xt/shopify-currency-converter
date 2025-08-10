@@ -2,7 +2,7 @@
 
 api_version = "2024-07"
 type = "ui_extension"
-name = "BGN EUR price display"
+name = "BGN EUR Thank you page"
 handle = "eurozone-currency-display"
 
 targeting = [

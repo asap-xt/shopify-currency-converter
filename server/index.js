@@ -1008,7 +1008,7 @@ router.get('(/)', async (ctx) => {
   <div class="container">
     <div class="header">
       <h1>BGN/EUR Price Display</h1>
-      <p>Показвайте цените в лева и евро на Thank You страницата</p>
+      <p>Показвайте цените в лева и евро на Thank You & Order Status страниците</p>
       <div class="loading" id="loading">Зареждане...</div>
       <span id="status-badge" style="display: none;" class="success-badge">✓ Активно</span>
     </div>
@@ -1041,11 +1041,19 @@ router.get('(/)', async (ctx) => {
           </li>
           <li>
             <strong>Навигирайте до Thank You страницата</strong><br>
-            <span style="color: #616161;">Settings → Checkout → Thank you page</span>
+            <span style="color: #616161;">Settings → Checkout → Thank you</span>
           </li>
           <li>
             <strong>Добавете приложението</strong><br>
-            <span style="color: #616161;">Add block → Apps → BGN EUR Price Display</span>
+            <span style="color: #616161;">Add block → Apps → BGN EUR Thank you page</span>
+          </li>
+          <li>
+            <strong>След това изберете Order Status </strong><br>
+            <span style="color: #616161;">Settings → Checkout → Order Status</span>
+          </li>
+          <li>
+            <strong>Добавете приложението</strong><br>
+            <span style="color: #616161;">Add block → Apps → BGN EUR Order Status</span>
           </li>
           <li>
             <strong>Запазете промените</strong><br>
@@ -1060,7 +1068,7 @@ router.get('(/)', async (ctx) => {
           <div class="feature">
             <div class="feature-text">
               <h3>Двойно показване</h3>
-              <p>Всички цени се показват едновременно в BGN и EUR, изчислени по фиксиран курс 1 EUR = 1.95583 BGN</p>
+              <p>Всички цени в поръчката се показват едновременно в BGN и EUR, изчислени по фиксиран курс 1 EUR = 1.95583 BGN</p>
             </div>
           </div>
           <div class="feature">
@@ -1072,7 +1080,7 @@ router.get('(/)', async (ctx) => {
           <div class="feature">
             <div class="feature-text">
               <h3>Пълна разбивка</h3>
-              <p>Включва всички елементи на поръчката - продукти, доставка и обща сума</p>
+              <p>Включва всички елементи на поръчката - продукти, доставка и обща сума, ксе показват на Thank you & Order Status страниците</p>
             </div>
           </div>
         </div>
