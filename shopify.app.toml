@@ -13,6 +13,18 @@ redirect_urls = [
 [webhooks]
 api_version = "2024-10"
 
+[[webhooks.subscriptions]]
+topics = ["customers/data_request"]
+uri = "/webhooks/customers/data_request"
+
+[[webhooks.subscriptions]]
+topics = ["customers/redact"]
+uri = "/webhooks/customers/redact"
+
+[[webhooks.subscriptions]]
+topics = ["shop/redact"]
+uri = "/webhooks/shop/redact"
+
 [pos]
 embedded = false
 
