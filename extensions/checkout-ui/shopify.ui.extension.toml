@@ -1,6 +1,7 @@
 # extensions/checkout-ui/shopify.ui.extension.toml
 
-api_version = "2024-07"
+api_version = "2024-10"
+uid = "e2771400-c4c0-b4e0-cb99-3f03c8282f65e947aa93"
 type = "ui_extension"
 name = "BGN EUR Thank you page"
 handle = "eurozone-currency-display"

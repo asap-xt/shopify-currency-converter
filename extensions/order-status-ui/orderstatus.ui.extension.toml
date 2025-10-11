@@ -1,6 +1,7 @@
 # extensions/order-status-ui/orderstatus.ui.extension.toml
 
-api_version = "2024-07"
+api_version = "2024-10"
+uid = "41985a45-1ffe-984c-d556-10044c8672c61b67be30"
 type = "ui_extension"
 name = "BGN EUR Order Status"
 handle = "bgn-eur-order-status"
