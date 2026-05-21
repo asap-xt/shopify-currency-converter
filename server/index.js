@@ -401,18 +401,24 @@ router.get('/api/billing/status', authenticateRequest, async (ctx) => {
     return;
   }
   
-  // Force fresh check if coming from billing
-  if (ctx.query.billing === 'success' || ctx.query.charge_id || ctx.query.return_status === 'success') {
-    // Skip cache
-  } else {
-    // Check cache
+  // Force fresh check if coming from billing OR if client explicitly requests it.
+  // `fresh=1` is sent by the embedded admin on initial load — Shopify Managed Pricing
+  // redirects back to the app root WITHOUT charge_id/billing=success, so this is the
+  // only signal we have that the merchant may have just changed their plan.
+  const skipCache =
+    ctx.query.billing === 'success' ||
+    ctx.query.charge_id ||
+    ctx.query.return_status === 'success' ||
+    ctx.query.fresh === '1';
+
+  if (!skipCache) {
     const cached = SUBSCRIPTION_CACHE[shop];
     if (cached && cached.timestamp > Date.now() - CACHE_DURATION) {
       ctx.body = cached.data;
       return;
     }
   }
-  
+
   try {
     // Query active subscriptions
     const query = `{
@@ -429,33 +435,54 @@ router.get('/api/billing/status', authenticateRequest, async (ctx) => {
       }
     }`;
 
-    const response = await fetch(`https://${shop}/admin/api/2024-10/graphql.json`, {
-      method: 'POST',
-      headers: {
-        'X-Shopify-Access-Token': session.accessToken,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ query })
-    });
+    // Retry on empty result when skipCache is set: Shopify's Managed Pricing flow
+    // may not have propagated the new subscription to currentAppInstallation yet,
+    // so a single query right after the redirect can return 0 active subs even
+    // though the merchant just subscribed.
+    const maxAttempts = skipCache ? 3 : 1;
+    const retryDelayMs = 1000;
+    let subscriptions = [];
+    let activeSubscriptions = [];
+    let graphqlError = null;
 
-    const result = await response.json();
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      const response = await fetch(`https://${shop}/admin/api/2024-10/graphql.json`, {
+        method: 'POST',
+        headers: {
+          'X-Shopify-Access-Token': session.accessToken,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ query })
+      });
 
-    if (result.errors) {
-      console.error('GraphQL errors:', result.errors);
+      const result = await response.json();
+
+      if (result.errors) {
+        graphqlError = result.errors[0]?.message;
+        break;
+      }
+
+      subscriptions = result.data?.currentAppInstallation?.activeSubscriptions || [];
+      activeSubscriptions = subscriptions.filter(sub => sub.status === 'ACTIVE');
+
+      if (activeSubscriptions.length > 0 || attempt === maxAttempts) {
+        break;
+      }
+
+      await new Promise(r => setTimeout(r, retryDelayMs));
+    }
+
+    if (graphqlError) {
+      console.error('GraphQL errors:', graphqlError);
       ctx.body = {
         hasActiveSubscription: false,
         shop: shop,
         error: 'GraphQL query error',
-        message: result.errors[0]?.message
+        message: graphqlError
       };
       return;
     }
 
-    const subscriptions = result.data?.currentAppInstallation?.activeSubscriptions || [];
-    
-    // Filter only active subscriptions
-    const activeSubscriptions = subscriptions.filter(sub => sub.status === 'ACTIVE');
-    
     const hasActiveSubscription = activeSubscriptions.length > 0;
 
     const responseData = {
@@ -1192,7 +1219,12 @@ router.get('(/)', async (ctx) => {
     }
     
     async function checkBillingStatusWithToken() {
-      const url = '/api/billing/status?shop=${shop}';
+      // fresh=1 forces the server to bypass its in-memory subscription cache.
+      // Required because Shopify Managed Pricing redirects back to the app root
+      // without any "billing succeeded" query param, so the server would otherwise
+      // serve a stale cached "not subscribed" response right after the merchant
+      // just selected a plan.
+      const url = '/api/billing/status?shop=${shop}&fresh=1';
       
       const response = await fetch(url, {
         headers: {
