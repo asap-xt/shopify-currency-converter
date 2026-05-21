@@ -329,39 +329,41 @@ router.get('/api/billing/create', authenticateRequest, async (ctx) => {
 
     const result = await response.json();
 
-    // Check if it's a Managed Pricing error
-    const errors = result.data?.appSubscriptionCreate?.userErrors || [];
-    const isManagedPricingError = errors.some(e => 
-      e.message?.includes('Managed Pricing Apps cannot use the Billing API')
-    );
+    const userErrors = result.data?.appSubscriptionCreate?.userErrors || [];
+    const topLevelErrors = result.errors || [];
+    const confirmationUrl = result.data?.appSubscriptionCreate?.confirmationUrl;
 
-    if (isManagedPricingError) {
-      // Fallback to Managed Pricing approach
+    // Fall back to Shopify's Managed Pricing screen whenever appSubscriptionCreate
+    // can't produce a confirmation URL. This covers:
+    //   - The original "Managed Pricing Apps cannot use the Billing API" error
+    //   - Shops on a Custom Plan assigned via Partner Dashboard (the mutation
+    //     fails with a different error here, but the merchant still needs to be
+    //     sent to the pricing_plans screen to accept their Custom Plan)
+    //   - Any other Shopify-side error that prevents programmatic subscription
+    // For the merchant the outcome is the same either way: they land on
+    // Shopify's plan selection screen and pick whatever plan is offered to them.
+    const mutationFailed =
+      userErrors.length > 0 ||
+      topLevelErrors.length > 0 ||
+      !confirmationUrl;
+
+    if (mutationFailed) {
+      if (userErrors.length > 0 || topLevelErrors.length > 0) {
+        console.warn('appSubscriptionCreate failed, falling back to Managed Pricing redirect', {
+          shop,
+          userErrors,
+          topLevelErrors
+        });
+      }
+
       const appHandle = process.env.SHOPIFY_APP_HANDLE || 'bgn-eur-price-display';
       const shopDomain = shop.replace('.myshopify.com', '');
-      const confirmationUrl = `https://admin.shopify.com/store/${shopDomain}/charges/${appHandle}/pricing_plans`;
-      
-      ctx.body = { 
-        confirmationUrl,
+      const managedPricingUrl = `https://admin.shopify.com/store/${shopDomain}/charges/${appHandle}/pricing_plans`;
+
+      ctx.body = {
+        confirmationUrl: managedPricingUrl,
         type: 'managed_pricing'
       };
-      return;
-    }
-
-    if (errors.length > 0) {
-      console.error('Billing create errors:', errors);
-      ctx.status = 400;
-      ctx.body = { 
-        error: 'Failed to create subscription',
-        details: errors
-      };
-      return;
-    }
-
-    const confirmationUrl = result.data?.appSubscriptionCreate?.confirmationUrl;
-    if (!confirmationUrl) {
-      ctx.status = 500;
-      ctx.body = { error: 'No confirmation URL received' };
       return;
     }
 
