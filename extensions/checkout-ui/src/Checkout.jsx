@@ -1,175 +1,90 @@
 // extensions/checkout-ui/src/Checkout.jsx
-import { 
-  reactExtension,
-  Text,
-  View,
-  BlockStack,
-  InlineLayout,
-  useTotalAmount,
-  useCartLines,
-  useApi,
-  useSubscription,
-  Divider,
-  useLocalizationCountry,
-  useLocalizationMarket
-} from '@shopify/ui-extensions-react/checkout';
+// Thank-you page block (purchase.thank-you.block.render) — Preact + Polaris web components (2025-10+)
+import '@shopify/ui-extensions/preact';
+import { render } from 'preact';
 
 const EUR_TO_BGN_RATE = 1.95583;
 
-// Функции за конвертиране
-const convertBGNtoEUR = (bgnAmount) => {
-  return (parseFloat(bgnAmount) / EUR_TO_BGN_RATE).toFixed(2);
-};
+const convertBGNtoEUR = (bgn) => (Number(bgn) / EUR_TO_BGN_RATE).toFixed(2);
+const convertEURtoBGN = (eur) => (Number(eur) * EUR_TO_BGN_RATE).toFixed(2);
 
-const convertEURtoBGN = (eurAmount) => {
-  return (parseFloat(eurAmount) * EUR_TO_BGN_RATE).toFixed(2);
-};
+function dualPrice(amount, isBGN) {
+  const a = Number(amount) || 0;
+  return isBGN
+    ? `${a.toFixed(2)} ЛВ / ${convertBGNtoEUR(a)} EUR`
+    : `${a.toFixed(2)} EUR / ${convertEURtoBGN(a)} ЛВ`;
+}
 
-export default reactExtension(
-  'purchase.thank-you.block.render',
-  () => <Extension />,
-);
+export default async () => {
+  render(<Extension />, document.body);
+};
 
 function Extension() {
-  // Проверяваме market и country
-  const country = useLocalizationCountry();
-  const market = useLocalizationMarket();
-  
-  // Общата сума
-  const total = useTotalAmount();
-  
-  // Продуктите в поръчката
-  const lines = useCartLines();
-  
-  // ПРОВЕРКА - показваме САМО за България (BG country или bulgaria market)
-  const isBulgaria = country?.isoCode === 'BG' || 
-                     market?.handle === 'bulgaria' || 
-                     market?.handle === 'bg';
-  
-  if (!isBulgaria) {
-    return null; // Не показваме за други държави/markets
-  }
-  
-  const currency = total?.currencyCode;
-  
-  // Breakdown данни
-  const api = useApi();
-  let subtotal = null;
-  let shipping = null;
-  
-  try {
-    if (api.cost) {
-      if (api.cost.subtotalAmount) {
-        subtotal = useSubscription(api.cost.subtotalAmount);
-      }
-      if (api.cost.totalShippingAmount) {
-        shipping = useSubscription(api.cost.totalShippingAmount);
-      }
-    }
-  } catch (error) {
-    console.log('Error:', error);
-  }
-  
-  // Определяме кой е основен и кой вторичен според валутата
-  const isBGN = currency === 'BGN';
-  const totalAmount = total?.amount || 0;
+  // Показваме САМО за България (BG country или bulgaria market)
+  const country = shopify.localization?.country?.value;
+  const market = shopify.localization?.market?.value;
+  const isBulgaria =
+    country?.isoCode === 'BG' ||
+    market?.handle === 'bulgaria' ||
+    market?.handle === 'bg';
+
+  if (!isBulgaria) return null;
+
+  const total = shopify.cost?.totalAmount?.value;
+  const shipping = shopify.cost?.totalShippingAmount?.value;
+  const lines = shopify.lines?.value || [];
+  const isBGN = total?.currencyCode === 'BGN';
 
   return (
-    <View padding="base" border="base" background="subdued">
-      <BlockStack spacing="base">
-        {/* Заглавие с флагове */}
-        <Text size="medium" emphasis="bold">
-          🇧🇬 Твоята поръчка 🇪🇺
-        </Text>
-        
-        {/* Разбивка секция */}
-        <View padding="base" background="base" cornerRadius="base">
-          <BlockStack spacing="base">
-            <Text size="small" emphasis="bold">
-              Продукти:
-            </Text>
-            
-            {/* Продукти по отделно */}
-            {lines && lines.length > 0 && (
-              <BlockStack spacing="tight">
-                {lines.map((line, index) => {
-                  const title =
-                    line.merchandise.product?.title ?? 
-                    line.merchandise.title;
-                  const lineAmount = line.cost.totalAmount.amount;
-                  
-                  const displayPrice = isBGN
-                    ? `${lineAmount.toFixed(2)} ЛВ / ${convertBGNtoEUR(lineAmount)} EUR`
-                    : `${lineAmount.toFixed(2)} EUR / ${convertEURtoBGN(lineAmount)} ЛВ`;
+    <s-box padding="base" border="base" borderRadius="base" background="subdued">
+      <s-stack gap="base">
+        <s-heading>🇧🇬 Твоята поръчка 🇪🇺</s-heading>
 
+        <s-box padding="base" borderRadius="base" background="base">
+          <s-stack gap="base">
+            <s-text type="strong">Продукти:</s-text>
+
+            {lines.length > 0 && (
+              <s-stack gap="small-200">
+                {lines.map((line, index) => {
+                  const title = line.merchandise?.product?.title ?? line.merchandise?.title;
                   return (
-                    <InlineLayout
+                    <Row
                       key={line.id || index}
-                      spacing="base"
-                      blockAlignment="center"
-                    >
-                      <View inlineAlignment="start" minInlineSize="fill">
-                        <Text size="small">
-                          {line.quantity}× {title}
-                        </Text>
-                      </View>
-                      <View inlineAlignment="end">
-                        <Text size="small" emphasis="bold">
-                          {displayPrice}
-                        </Text>
-                      </View>
-                    </InlineLayout>
+                      label={`${line.quantity}× ${title}`}
+                      value={dualPrice(line.cost?.totalAmount?.amount, isBGN)}
+                    />
                   );
                 })}
-              </BlockStack>
+              </s-stack>
             )}
 
-            {/* Доставка */}
-            {shipping && shipping.amount > 0 && (
+            {shipping && Number(shipping.amount) > 0 && (
               <>
-                <Divider />
-                <InlineLayout spacing="base" blockAlignment="center">
-                  <View inlineAlignment="start" minInlineSize="fill">
-                    <Text size="small">Доставка</Text>
-                  </View>
-                  <View inlineAlignment="end">
-                    <Text size="small" emphasis="bold">
-                      {isBGN
-                        ? `${shipping.amount.toFixed(2)} ЛВ / ${convertBGNtoEUR(shipping.amount)} EUR`
-                        : `${shipping.amount.toFixed(2)} EUR / ${convertEURtoBGN(shipping.amount)} ЛВ`
-                      }
-                    </Text>
-                  </View>
-                </InlineLayout>
+                <s-divider />
+                <Row label="Доставка" value={dualPrice(shipping.amount, isBGN)} />
               </>
             )}
-          </BlockStack>
-        </View>
-        
-        {/* Обща сума */}
-        <View padding="tight" background="interactive" cornerRadius="base">
-          <InlineLayout spacing="base" blockAlignment="center">
-            <View inlineAlignment="start" minInlineSize="fill">
-              <Text size="medium" emphasis="bold">Общо:</Text>
-            </View>
-            <View inlineAlignment="end">
-              <Text size="large" emphasis="bold">
-                {isBGN
-                  ? `${totalAmount.toFixed(2)} ЛВ / ${convertBGNtoEUR(totalAmount)} EUR`
-                  : `${totalAmount.toFixed(2)} EUR / ${convertEURtoBGN(totalAmount)} ЛВ`
-                }
-              </Text>
-            </View>
-          </InlineLayout>
-        </View>
-        
-        {/* Курс */}
-        <View padding="extraTight">
-          <Text size="small" appearance="subdued">
-            Курс: 1 EUR = {EUR_TO_BGN_RATE} BGN (фиксиран курс на БНБ)
-          </Text>
-        </View>
-      </BlockStack>
-    </View>
+          </s-stack>
+        </s-box>
+
+        <s-box padding="small" borderRadius="base" background="base">
+          <Row label="Общо:" value={dualPrice(total?.amount, isBGN)} />
+        </s-box>
+
+        <s-text color="subdued">
+          Курс: 1 EUR = {EUR_TO_BGN_RATE} BGN (фиксиран курс на БНБ)
+        </s-text>
+      </s-stack>
+    </s-box>
+  );
+}
+
+function Row({ label, value }) {
+  return (
+    <s-stack direction="inline" justifyContent="space-between" alignItems="center" gap="base">
+      <s-text>{label}</s-text>
+      <s-text type="strong">{value}</s-text>
+    </s-stack>
   );
 }
