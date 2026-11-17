@@ -174,6 +174,39 @@ router.get('/session-token-bounce', async (ctx) => {
   `;
 });
 
+// Re-exchange when the stored token has less than this left
+const TOKEN_REFRESH_MARGIN_MS = 5 * 60 * 1000;
+
+/**
+ * Token exchange for an EXPIRING offline access token.
+ * Shopify deprecates non-expiring offline tokens; @shopify/shopify-api 11.x can't request
+ * expiring ones, so call the endpoint directly (form-encoded, expiring=1).
+ */
+async function exchangeForExpiringOfflineToken(shop, sessionToken) {
+  const response = await fetch(`https://${shop}/admin/oauth/access_token`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded',
+      Accept: 'application/json'
+    },
+    body: new URLSearchParams({
+      client_id: SHOPIFY_API_KEY,
+      client_secret: SHOPIFY_API_SECRET,
+      grant_type: 'urn:ietf:params:oauth:grant-type:token-exchange',
+      subject_token: sessionToken,
+      subject_token_type: 'urn:ietf:params:oauth:token-type:id_token',
+      requested_token_type: 'urn:shopify:params:oauth:token-type:offline-access-token',
+      expiring: '1'
+    })
+  });
+
+  const text = await response.text();
+  if (!response.ok) {
+    throw new Error(`Token exchange HTTP ${response.status} for ${shop}: ${text.slice(0, 300)}`);
+  }
+  return JSON.parse(text);
+}
+
 // Authentication middleware using Token Exchange
 async function authenticateRequest(ctx, next) {
   let encodedSessionToken = null;
@@ -212,26 +245,21 @@ async function authenticateRequest(ctx, next) {
     return;
   }
 
-  const dest = new URL(decodedSessionToken.dest);
-  let shop = dest.hostname;
-
-  const queryShop = ctx.query.shop;
-  if (queryShop && queryShop !== shop) {
-    shop = queryShop;
-  }
+  // The shop comes ONLY from the verified session token. (A ?shop= override used to be
+  // honoured here, which let any store's session token pick another store's cached token.)
+  const shop = new URL(decodedSessionToken.dest).hostname;
 
   const sessions = await memorySessionStorage.findSessionsByShop(shop);
   let session = sessions.find(s => !s.isOnline);
 
-  if (!session || !session.accessToken || session.accessToken === 'placeholder') {
+  const expiresSoon = session?.expires &&
+    new Date(session.expires).getTime() - Date.now() < TOKEN_REFRESH_MARGIN_MS;
+
+  if (!session || !session.accessToken || session.accessToken === 'placeholder' || expiresSoon) {
     try {
-      const tokenExchangeResult = await shopify.auth.tokenExchange({
-        shop: shop,
-        sessionToken: encodedSessionToken,
-      });
-      
-      const accessToken = tokenExchangeResult.accessToken || tokenExchangeResult.session?.accessToken;
-      
+      const tokenExchangeResult = await exchangeForExpiringOfflineToken(shop, encodedSessionToken);
+      const accessToken = tokenExchangeResult.access_token;
+
       if (!accessToken) {
         console.error('Token exchange succeeded but no access token received');
         ctx.status = 500;
@@ -246,14 +274,18 @@ async function authenticateRequest(ctx, next) {
         state: 'active',
         isOnline: false,
         accessToken: accessToken,
-        scope: tokenExchangeResult.session?.scope || tokenExchangeResult.scope || SCOPES,
-        expires: null
+        scope: tokenExchangeResult.scope || SCOPES,
+        // Expiring offline token (~60 min). Every request carries a fresh session token,
+        // so we simply exchange again when it is close to expiry — no refresh token needed.
+        expires: tokenExchangeResult.expires_in
+          ? new Date(Date.now() + tokenExchangeResult.expires_in * 1000)
+          : undefined
       });
 
       await memorySessionStorage.storeSession(session);
 
     } catch (error) {
-      console.error('Token exchange failed:', error);
+      console.error('Token exchange failed:', error.message);
       ctx.status = 500;
       ctx.body = 'Token exchange failed';
       return;
